@@ -1,0 +1,1936 @@
+<!DOCTYPE html>
+<html lang="my">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hasan POS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js" defer></script>
+<style>
+  :root{
+    --primary:#0B4D3C;
+    --primary-dark:#082F24;
+    --primary-light:#146652;
+    --primary-tint:#E4EEE9;
+    --accent:#E7A339;
+    --accent-dark:#C6851E;
+    --bg:#F6F3EC;
+    --surface:#FFFFFF;
+    --text:#1E2A26;
+    --text-muted:#71807A;
+    --border:#E6E0D2;
+    --danger:#C0392B;
+    --danger-tint:#FBECEA;
+    --success:#2E8B57;
+    --radius-lg:18px;
+    --radius-md:12px;
+    --radius-sm:8px;
+    --font:'Manrope','Noto Sans Myanmar','Myanmar Text',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    margin:0; font-family:var(--font); background:var(--bg); color:var(--text);
+    -webkit-font-smoothing:antialiased;
+    display:flex; justify-content:center;
+  }
+  #app-shell{
+    width:100%; max-width:480px; min-height:100vh; background:var(--bg);
+    display:flex; flex-direction:column; position:relative;
+    box-shadow:0 0 40px rgba(0,0,0,0.08);
+  }
+  @media (min-width:481px){
+    body{ background:#EDE8DC; padding:24px 0; }
+    #app-shell{ min-height:calc(100vh - 48px); border-radius:28px; overflow:hidden; }
+  }
+
+  /* ---------- Header ---------- */
+  #topbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 16px; background:var(--primary); color:#fff;
+    position:sticky; top:0; z-index:20;
+  }
+  #topbar .brand{ display:flex; align-items:center; gap:10px; }
+  #topbar .brand-mark{
+    width:34px; height:34px; border-radius:10px; background:var(--accent);
+    display:flex; align-items:center; justify-content:center; font-weight:800; color:var(--primary-dark); font-size:16px;
+  }
+  #topbar .shop-name{ font-weight:700; font-size:15px; line-height:1.1; }
+  #topbar .shop-sub{ font-size:11px; opacity:.75; margin-top:2px; }
+  #sync-dot-wrap{ display:flex; align-items:center; gap:6px; font-size:11px; opacity:.9; cursor:pointer; padding:6px 8px; border-radius:20px; background:rgba(255,255,255,0.08);}
+  #sync-dot{ width:8px; height:8px; border-radius:50%; background:#7ED9A6; }
+  #sync-dot.syncing{ background:var(--accent); animation:pulse 1s infinite; }
+  #sync-dot.err{ background:#E76A5C; }
+  @keyframes pulse{ 0%,100%{opacity:1;} 50%{opacity:.35;} }
+
+  /* ---------- Main scroll area ---------- */
+  #screen{ flex:1; overflow-y:auto; padding:16px 16px 100px; }
+  #screen::-webkit-scrollbar{ display:none; }
+
+  h1,h2,h3{ margin:0; }
+  .section-title{ font-size:14px; font-weight:700; color:var(--text); margin:22px 0 10px; }
+  .section-title:first-child{ margin-top:0; }
+  .muted{ color:var(--text-muted); }
+
+  /* ---------- Cards ---------- */
+  .card{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:14px; }
+  .stat-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .stat-card{
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md);
+    padding:14px; position:relative; overflow:hidden;
+  }
+  .stat-card .label{ font-size:12px; color:var(--text-muted); font-weight:600; }
+  .stat-card .value{ font-size:22px; font-weight:800; margin-top:6px; color:var(--primary-dark); }
+  .stat-card.accent .value{ color:var(--accent-dark); }
+  .stat-card .unit{ font-size:12px; font-weight:600; color:var(--text-muted); margin-left:2px;}
+
+  .hero-card{
+    background:linear-gradient(135deg,var(--primary) 0%,var(--primary-light) 100%);
+    color:#fff; border-radius:var(--radius-lg); padding:20px; margin-bottom:18px;
+  }
+  .hero-card .hero-label{ font-size:12px; opacity:.8; font-weight:600; }
+  .hero-card .hero-value{ font-size:32px; font-weight:800; margin-top:4px; }
+  .hero-card .hero-foot{ display:flex; gap:16px; margin-top:14px; font-size:12px; opacity:.9; }
+  .hero-card .hero-foot b{ font-size:14px; display:block; }
+
+  /* ---------- Buttons ---------- */
+  .btn{
+    font-family:var(--font); border:none; cursor:pointer; border-radius:var(--radius-sm);
+    padding:12px 16px; font-weight:700; font-size:14px; display:inline-flex; align-items:center; justify-content:center; gap:6px;
+    transition:transform .08s ease, opacity .15s ease;
+  }
+  .btn:active{ transform:scale(0.97); }
+  .btn-primary{ background:var(--primary); color:#fff; }
+  .btn-accent{ background:var(--accent); color:#3A2A05; }
+  .btn-outline{ background:transparent; color:var(--primary); border:1.5px solid var(--primary); }
+  .btn-danger-outline{ background:transparent; color:var(--danger); border:1.5px solid var(--danger); }
+  .btn-ghost{ background:var(--primary-tint); color:var(--primary-dark); }
+  .btn-block{ width:100%; }
+  .btn-sm{ padding:8px 12px; font-size:12.5px; }
+  .btn:disabled{ opacity:.5; cursor:not-allowed; }
+  .fab{
+    position:fixed; z-index:15; right:calc(50% - 240px + 18px); bottom:96px;
+    width:56px; height:56px; border-radius:50%; background:var(--accent); color:#3A2A05;
+    display:flex; align-items:center; justify-content:center; font-size:26px; border:none; cursor:pointer;
+    box-shadow:0 8px 18px rgba(0,0,0,0.22);
+  }
+  @media (max-width:480px){ .fab{ right:18px; } }
+
+  /* ---------- Bottom nav ---------- */
+  #bottomnav{
+    position:sticky; bottom:0; left:0; right:0; z-index:20;
+    background:var(--surface); border-top:1px solid var(--border);
+    display:flex; padding:6px 4px calc(6px + env(safe-area-inset-bottom));
+  }
+  .nav-btn{
+    flex:1; background:none; border:none; display:flex; flex-direction:column; align-items:center; gap:3px;
+    padding:8px 2px; cursor:pointer; color:var(--text-muted); font-family:var(--font);
+  }
+  .nav-btn svg{ width:22px; height:22px; }
+  .nav-btn span{ font-size:10.5px; font-weight:700; }
+  .nav-btn.active{ color:var(--primary); }
+  .nav-btn.active svg{ stroke:var(--primary); }
+
+  /* ---------- Forms ---------- */
+  label{ font-size:12.5px; font-weight:700; color:var(--text-muted); display:block; margin:14px 0 6px; }
+  label:first-child{ margin-top:0; }
+  input[type=text], input[type=number], input[type=tel], select, textarea{
+    width:100%; font-family:var(--font); font-size:14.5px; padding:11px 12px; border-radius:var(--radius-sm);
+    border:1.5px solid var(--border); background:var(--surface); color:var(--text);
+  }
+  input:focus, select:focus, textarea:focus{ outline:none; border-color:var(--primary); }
+  .field-row{ display:flex; gap:10px; }
+  .field-row > div{ flex:1; }
+
+  /* ---------- Search ---------- */
+  .search-bar{ display:flex; align-items:center; gap:8px; background:var(--surface); border:1.5px solid var(--border); border-radius:var(--radius-sm); padding:9px 12px; }
+  .search-bar input{ border:none; padding:0; flex:1; }
+  .search-bar input:focus{ outline:none; }
+
+  /* ---------- Chips ---------- */
+  .chip-row{ display:flex; gap:8px; overflow-x:auto; padding-bottom:2px; margin-bottom:14px; }
+  .chip-row::-webkit-scrollbar{ display:none; }
+  .chip{
+    flex-shrink:0; padding:8px 14px; border-radius:20px; background:var(--surface); border:1.5px solid var(--border);
+    font-size:13px; font-weight:700; color:var(--text-muted); cursor:pointer; white-space:nowrap;
+  }
+  .chip.active{ background:var(--primary); color:#fff; border-color:var(--primary); }
+
+  /* ---------- Product grid (POS) ---------- */
+  .product-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .product-card{
+    background:var(--surface); border:1.5px solid var(--border); border-radius:var(--radius-md);
+    padding:12px; cursor:pointer; text-align:left; position:relative; display:flex; flex-direction:column; gap:6px;
+  }
+  .product-card:active{ transform:scale(0.98); }
+  .product-card .p-icon{ font-size:26px; }
+  .product-card .p-name{ font-size:13.5px; font-weight:700; line-height:1.25; min-height:34px; }
+  .product-card .p-price{ font-size:14px; font-weight:800; color:var(--primary-dark); }
+  .product-card .p-stock{ font-size:11px; color:var(--text-muted); }
+  .product-card .p-stock.low{ color:var(--danger); font-weight:700; }
+  .product-card.out{ opacity:.45; pointer-events:none; }
+  .qty-badge{
+    position:absolute; top:-8px; right:-8px; background:var(--accent); color:#3A2A05; font-weight:800; font-size:12px;
+    min-width:22px; height:22px; border-radius:11px; display:flex; align-items:center; justify-content:center; padding:0 5px;
+  }
+
+  /* ---------- Product list (management) ---------- */
+  .plist-item{
+    display:flex; align-items:center; gap:12px; background:var(--surface); border:1px solid var(--border);
+    border-radius:var(--radius-md); padding:11px 12px; margin-bottom:9px;
+  }
+  .plist-item .p-icon{ font-size:24px; width:38px; height:38px; background:var(--primary-tint); border-radius:10px; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .plist-item .p-info{ flex:1; min-width:0; }
+  .plist-item .p-info .name{ font-weight:700; font-size:14px; }
+  .plist-item .p-info .meta{ font-size:11.5px; color:var(--text-muted); margin-top:2px; }
+  .plist-item .p-actions{ display:flex; gap:6px; }
+  .icon-btn{
+    width:32px; height:32px; border-radius:8px; border:1px solid var(--border); background:var(--surface);
+    display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--text-muted);
+  }
+  .icon-btn.danger{ color:var(--danger); border-color:#F3D3CE; }
+
+  /* ---------- Empty state ---------- */
+  .empty-state{ text-align:center; padding:50px 20px; color:var(--text-muted); }
+  .empty-state .emoji{ font-size:40px; margin-bottom:10px; }
+  .empty-state .title{ font-weight:700; color:var(--text); margin-bottom:4px; }
+
+  /* ---------- Cart bottom bar / sheet ---------- */
+  #cart-bar{
+    position:sticky; bottom:0; left:0; right:0; z-index:14; margin:0 -16px; padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+    background:var(--primary-dark); color:#fff; display:none; align-items:center; justify-content:space-between; gap:12px;
+    border-radius:16px 16px 0 0;
+  }
+  #cart-bar.show{ display:flex; }
+  #cart-bar .cb-left{ font-size:12.5px; opacity:.85; }
+  #cart-bar .cb-total{ font-size:17px; font-weight:800; }
+
+  .sheet-overlay{
+    position:fixed; inset:0; background:rgba(15,20,18,0.5); z-index:30; display:none; align-items:flex-end; justify-content:center;
+  }
+  .sheet-overlay.show{ display:flex; }
+  .sheet{
+    background:var(--surface); width:100%; max-width:480px; border-radius:22px 22px 0 0;
+    max-height:88vh; overflow-y:auto; padding:18px 18px calc(18px + env(safe-area-inset-bottom));
+    animation:sheetup .22s ease;
+  }
+  @keyframes sheetup{ from{ transform:translateY(24px); opacity:0;} to{ transform:translateY(0); opacity:1; } }
+  .sheet-handle{ width:40px; height:4px; background:var(--border); border-radius:2px; margin:0 auto 14px; }
+  .sheet-header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
+  .sheet-header h3{ font-size:16.5px; }
+  .sheet-close{ background:var(--bg); border:none; width:30px; height:30px; border-radius:50%; cursor:pointer; color:var(--text-muted); font-size:16px; }
+
+  .cart-line{ display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--border); }
+  .cart-line:last-child{ border-bottom:none; }
+  .cart-line .cl-icon{ font-size:20px; width:34px; height:34px; background:var(--primary-tint); border-radius:9px; display:flex; align-items:center; justify-content:center; flex-shrink:0;}
+  .cart-line .cl-info{ flex:1; min-width:0; }
+  .cart-line .cl-name{ font-size:13.5px; font-weight:700; }
+  .cart-line .cl-price{ font-size:11.5px; color:var(--text-muted); }
+  .qty-stepper{ display:flex; align-items:center; gap:8px; }
+  .qty-stepper button{ width:26px; height:26px; border-radius:7px; border:1px solid var(--border); background:var(--bg); cursor:pointer; font-weight:800; color:var(--primary); }
+  .qty-stepper span{ min-width:18px; text-align:center; font-weight:700; font-size:13.5px; }
+
+  .pay-methods{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
+  .pay-btn{
+    border:1.5px solid var(--border); background:var(--surface); border-radius:var(--radius-sm); padding:10px; text-align:center;
+    cursor:pointer; font-size:12.5px; font-weight:700; color:var(--text-muted); display:flex; flex-direction:column; align-items:center; gap:4px;
+  }
+  .pay-btn .pe{ font-size:18px; }
+  .pay-btn.active{ border-color:var(--primary); background:var(--primary-tint); color:var(--primary-dark); }
+
+  .summary-row{ display:flex; justify-content:space-between; font-size:13.5px; margin:6px 0; }
+  .summary-row.total{ font-size:17px; font-weight:800; margin-top:10px; padding-top:10px; border-top:1.5px dashed var(--border); }
+
+  /* ---------- Receipt ---------- */
+  .receipt{ font-family:'Manrope',monospace; }
+  .receipt .r-head{ text-align:center; margin-bottom:14px; }
+  .receipt .r-head .sn{ font-weight:800; font-size:16px; }
+  .receipt .r-head .sd{ font-size:11.5px; color:var(--text-muted); margin-top:2px; }
+  .receipt .r-line{ display:flex; justify-content:space-between; font-size:13px; padding:5px 0; }
+  .receipt .r-divider{ border-top:1px dashed var(--border); margin:8px 0; }
+  .receipt .r-total{ font-weight:800; font-size:16px; }
+
+  .toast{
+    position:fixed; left:50%; transform:translateX(-50%); bottom:100px; z-index:60; background:var(--primary-dark); color:#fff;
+    padding:10px 18px; border-radius:30px; font-size:13px; font-weight:600; box-shadow:0 6px 18px rgba(0,0,0,0.25);
+    opacity:0; transition:opacity .25s, bottom .25s; pointer-events:none;
+  }
+  .toast.show{ opacity:1; bottom:112px; }
+
+  .low-badge{ background:var(--danger-tint); color:var(--danger); font-size:10.5px; font-weight:800; padding:2px 7px; border-radius:8px; }
+  .table-simple{ width:100%; border-collapse:collapse; }
+  .table-simple th{ text-align:left; font-size:11px; color:var(--text-muted); padding:0 0 6px; font-weight:700; }
+  .table-simple td{ font-size:13px; padding:8px 0; border-top:1px solid var(--border); }
+
+  .sale-item{
+    display:flex; justify-content:space-between; align-items:center; background:var(--surface); border:1px solid var(--border);
+    border-radius:var(--radius-md); padding:12px; margin-bottom:9px; cursor:pointer;
+  }
+  .sale-item .si-id{ font-weight:700; font-size:13.5px; }
+  .sale-item .si-time{ font-size:11.5px; color:var(--text-muted); margin-top:2px; }
+  .sale-item .si-total{ font-weight:800; color:var(--primary-dark); font-size:14.5px; }
+  .pill{ font-size:10.5px; font-weight:700; padding:3px 8px; border-radius:8px; background:var(--primary-tint); color:var(--primary-dark); }
+
+  /* ---------- Onboarding ---------- */
+  #onboarding{
+    position:fixed; inset:0; background:var(--primary); color:#fff; z-index:100; display:flex; flex-direction:column;
+    justify-content:center; padding:32px 26px; max-width:480px; margin:0 auto;
+  }
+  #onboarding .ob-mark{ width:64px; height:64px; border-radius:18px; background:var(--accent); display:flex; align-items:center; justify-content:center; font-weight:800; color:var(--primary-dark); font-size:28px; margin-bottom:18px; }
+  #onboarding h1{ font-size:26px; font-weight:800; }
+  #onboarding p{ opacity:.85; font-size:14px; line-height:1.6; margin-top:8px; }
+  #onboarding .ob-card{ background:rgba(255,255,255,0.08); border-radius:16px; padding:16px; margin-top:22px; }
+  #onboarding input{ background:#fff; }
+  #onboarding .ob-tabs{ display:flex; gap:8px; margin-bottom:14px; }
+  #onboarding .ob-tab{ flex:1; text-align:center; padding:9px; border-radius:10px; background:rgba(255,255,255,0.08); cursor:pointer; font-weight:700; font-size:13px; }
+  #onboarding .ob-tab.active{ background:var(--accent); color:var(--primary-dark); }
+  #onboarding .ob-hint{ font-size:11.5px; opacity:.7; margin-top:10px; line-height:1.5; }
+
+  .settings-item{ display:flex; align-items:center; justify-content:space-between; padding:13px 0; border-bottom:1px solid var(--border); }
+  .settings-item:last-child{ border-bottom:none; }
+  .settings-item .si-label{ font-size:13.5px; font-weight:600; }
+  .settings-item .si-sub{ font-size:11px; color:var(--text-muted); margin-top:2px; }
+  .code-box{ display:flex; align-items:center; justify-content:space-between; background:var(--primary-tint); border-radius:var(--radius-sm); padding:12px 14px; margin-top:6px; }
+  .code-box .code{ font-weight:800; font-size:17px; letter-spacing:2px; color:var(--primary-dark); }
+
+  .loading-spin{ width:34px; height:34px; border-radius:50%; border:3px solid rgba(255,255,255,0.25); border-top-color:#fff; animation:spin .8s linear infinite; margin:0 auto; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+
+  /* ---------- PIN lock ---------- */
+  #pinlock{
+    position:fixed; inset:0; background:var(--primary); color:#fff; z-index:90; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; padding:32px 26px; max-width:480px; margin:0 auto;
+  }
+  #pinlock .pl-mark{ width:56px; height:56px; border-radius:16px; background:var(--accent); display:flex; align-items:center; justify-content:center; font-weight:800; color:var(--primary-dark); font-size:24px; margin-bottom:14px; }
+  #pinlock h2{ font-size:19px; font-weight:800; }
+  #pinlock .pl-sub{ font-size:12.5px; opacity:.75; margin-top:4px; text-align:center; }
+  #pinlock .pl-dots{ display:flex; gap:14px; margin:26px 0; }
+  #pinlock .pl-dot{ width:14px; height:14px; border-radius:50%; border:2px solid rgba(255,255,255,0.5); }
+  #pinlock .pl-dot.filled{ background:var(--accent); border-color:var(--accent); }
+  #pinlock .pl-err{ color:#F3A29A; font-size:12.5px; height:16px; margin-bottom:10px; }
+  #pinlock .pl-pad{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; width:100%; max-width:260px; }
+  #pinlock .pl-key{
+    aspect-ratio:1; border-radius:50%; background:rgba(255,255,255,0.08); border:none; color:#fff;
+    font-size:20px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center;
+  }
+  #pinlock .pl-key:active{ background:rgba(255,255,255,0.2); }
+  #pinlock .pl-key.empty{ background:transparent; cursor:default; }
+  #pinlock .pl-staff-row{ display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:22px; max-width:300px; }
+  #pinlock .pl-staff-chip{ font-size:11.5px; padding:6px 12px; border-radius:14px; background:rgba(255,255,255,0.1); }
+
+  /* ---------- Staff management ---------- */
+  .staff-row{ display:flex; align-items:center; gap:10px; padding:11px 0; border-bottom:1px solid var(--border); }
+  .staff-row:last-child{ border-bottom:none; }
+  .staff-row .sr-avatar{ width:36px; height:36px; border-radius:50%; background:var(--primary-tint); color:var(--primary-dark); font-weight:800; display:flex; align-items:center; justify-content:center; font-size:14px; flex-shrink:0; }
+  .staff-row .sr-info{ flex:1; min-width:0; }
+  .staff-row .sr-name{ font-weight:700; font-size:13.5px; }
+  .staff-row .sr-pin{ font-size:11px; color:var(--text-muted); }
+</style>
+</head>
+<body>
+
+<div id="app-shell">
+
+  <div id="topbar">
+    <div class="brand">
+      <div class="brand-mark">HP</div>
+      <div>
+        <div class="shop-name" id="tb-shop-name">Hasan POS</div>
+        <div class="shop-sub" id="tb-shop-sub">ဆိုင်ကုဒ် —</div>
+      </div>
+    </div>
+    <div style="display:flex; align-items:center; gap:8px;">
+      <div id="staff-indicator" style="display:none; font-size:11px; opacity:.9; background:rgba(255,255,255,0.1); padding:6px 9px; border-radius:14px; cursor:pointer;" onclick="lockNow()"></div>
+      <div id="sync-dot-wrap" onclick="manualSync()">
+        <span id="sync-dot"></span>
+        <span id="sync-label">Sync</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="screen"></div>
+
+  <div id="bottomnav">
+    <button class="nav-btn" data-screen="dashboard" onclick="goScreen('dashboard')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg>
+      <span>ပင်မ</span>
+    </button>
+    <button class="nav-btn" data-screen="pos" onclick="goScreen('pos')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.4"/><circle cx="17" cy="20" r="1.4"/><path d="M2 3h2.4l2.2 11.4a2 2 0 0 0 2 1.6h8a2 2 0 0 0 2-1.6L21 7H5.2"/></svg>
+      <span>အရောင်း</span>
+    </button>
+    <button class="nav-btn" data-screen="products" onclick="goScreen('products')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>
+      <span>ကုန်ပစ္စည်း</span>
+    </button>
+    <button class="nav-btn" data-screen="reports" onclick="goScreen('reports')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6"/><rect x="12.5" y="8" width="3" height="10"/><rect x="18" y="5" width="3" height="13"/></svg>
+      <span>အစီရင်ခံစာ</span>
+    </button>
+    <button class="nav-btn" data-screen="settings" onclick="goScreen('settings')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.5 1Z"/></svg>
+      <span>ဆက်တင်</span>
+    </button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="sheet-overlay" id="sheet-overlay" onclick="if(event.target===this) closeSheet()">
+  <div class="sheet" id="sheet-content"></div>
+</div>
+
+<div id="onboarding"></div>
+<div id="pinlock" style="display:none;"></div>
+
+<script>
+/* =========================================================
+   HASAN POS — state, storage (cloud sync), and rendering
+   ========================================================= */
+
+const CUR = { symbol: 'Ks' };
+const LOW_STOCK_THRESHOLD = 5;
+const ICONS = ['🥤','☕','🍵','🍞','🍪','🧃','🍫','🧊','🍚','🥟','🍜','🧴','🧼','📒','🖊️','🔋','📦','🧺','🍬','🥫'];
+
+/* Google Apps Script source the user deploys as a free key-value backend
+   (backed by a Google Sheet) so the app can cloud-sync without Claude. */
+const APPS_SCRIPT_CODE = `function getSheet_(){
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  return ss.getSheetByName('data') || ss.insertSheet('data');
+}
+
+function doGet(e){
+  var key = e.parameter.key;
+  var sheet = getSheet_();
+  var data = sheet.getDataRange().getValues();
+  for (var i=0;i<data.length;i++){
+    if (data[i][0] === key){
+      return ContentService.createTextOutput(data[i][1]).setMimeType(ContentService.MimeType.TEXT);
+    }
+  }
+  return ContentService.createTextOutput('').setMimeType(ContentService.MimeType.TEXT);
+}
+
+function doPost(e){
+  var body = JSON.parse(e.postData.contents);
+  var action = body.action || 'set';
+  var key = body.key;
+  var sheet = getSheet_();
+  var data = sheet.getDataRange().getValues();
+  var rowIndex = -1;
+  for (var i=0;i<data.length;i++){
+    if (data[i][0] === key){ rowIndex = i+1; break; }
+  }
+  if (action === 'delete'){
+    if (rowIndex > 0) sheet.deleteRow(rowIndex);
+    return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);
+  }
+  var value = body.value;
+  if (rowIndex > 0){ sheet.getRange(rowIndex,2).setValue(value); }
+  else { sheet.appendRow([key, value]); }
+  return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);
+}`;
+
+let state = {
+  shopCode: null,
+  shopName: 'Hasan POS',
+  settings: { currency: 'Ks', shopName: 'Hasan POS', archiveDays: 90 },
+  products: [],
+  sales: [],
+  categories: ['အားလုံး'],
+  cart: [],           // {id, name, price, qty, icon}
+  activeCategory: 'အားလုံး',
+  activeScreen: 'dashboard',
+  paymentMethod: 'cash',
+  discountPct: 0,
+  syncStatus: 'idle',  // idle | syncing | ok | err
+  lastSyncAt: null,
+  staff: [],            // {id, name, pin}
+  currentStaffId: null,  // session-only, not persisted
+  archivedCount: 0,
+};
+let __pinBuffer = '';
+
+/* ---------------- storage helpers ---------------- */
+/* Three tiers, tried in order:
+   1) Cloud Sync (window.storage) — only exists inside the Claude app/artifact context.
+   2) Google Apps Script remote — a free Google Sheet acting as a tiny database,
+      used when the app runs as a standalone downloaded file (outside Claude).
+   3) localStorage — single-device fallback if neither of the above is set up. */
+const CLOUD_AVAILABLE = (typeof window !== 'undefined' && !!window.storage && typeof window.storage.get === 'function');
+
+function getRemoteUrl(){
+  try{ return (localStorage.getItem('hasanpos:remoteApiUrl') || '').trim(); }catch(e){ return ''; }
+}
+function setRemoteUrlLocal(url){
+  try{ localStorage.setItem('hasanpos:remoteApiUrl', (url||'').trim()); }catch(e){}
+}
+function syncMode(){
+  if(CLOUD_AVAILABLE) return 'cloud';
+  if(getRemoteUrl()) return 'google';
+  return 'local';
+}
+
+async function remoteGet(key){
+  const url = getRemoteUrl();
+  if(!url) return null;
+  try{
+    const res = await fetch(url + '?key=' + encodeURIComponent(key), { method:'GET' });
+    if(!res.ok) return null;
+    const text = await res.text();
+    return text ? text : null;
+  }catch(e){ return null; }
+}
+async function remoteSet(key, value){
+  const url = getRemoteUrl();
+  if(!url) return null;
+  try{
+    const res = await fetch(url, {
+      method:'POST',
+      headers: { 'Content-Type':'text/plain;charset=utf-8' }, // avoids CORS preflight on Apps Script
+      body: JSON.stringify({ action:'set', key, value }),
+    });
+    if(!res.ok) return null;
+    return { key, value };
+  }catch(e){ return null; }
+}
+async function remoteDelete(key){
+  const url = getRemoteUrl();
+  if(!url) return null;
+  try{
+    await fetch(url, {
+      method:'POST',
+      headers: { 'Content-Type':'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action:'delete', key }),
+    });
+    return { key, deleted:true };
+  }catch(e){ return null; }
+}
+
+async function rawStoreGet(key){
+  if(CLOUD_AVAILABLE){
+    try{ const r = await window.storage.get(key, true); return r ? r.value : null; }catch(e){ return null; }
+  }
+  if(getRemoteUrl()){
+    const v = await remoteGet(key);
+    if(v !== null){ try{ localStorage.setItem(key, v); }catch(e){} }
+    else { try{ return localStorage.getItem(key); }catch(e){ return null; } } // offline fallback to last-known copy
+    return v;
+  }
+  try{ return localStorage.getItem(key); }catch(e){ return null; }
+}
+async function rawStoreSet(key, value){
+  if(CLOUD_AVAILABLE){
+    try{ return await window.storage.set(key, value, true); }catch(e){ return null; }
+  }
+  if(getRemoteUrl()){
+    try{ localStorage.setItem(key, value); }catch(e){}
+    return await remoteSet(key, value);
+  }
+  try{ localStorage.setItem(key, value); return { key, value }; }catch(e){ return null; }
+}
+async function rawStoreDelete(key){
+  if(CLOUD_AVAILABLE){
+    try{ return await window.storage.delete(key, true); }catch(e){ return null; }
+  }
+  if(getRemoteUrl()){
+    try{ localStorage.removeItem(key); }catch(e){}
+    return await remoteDelete(key);
+  }
+  try{ localStorage.removeItem(key); return { key, deleted:true }; }catch(e){ return null; }
+}
+/* device-local key (shop code remembered on this device) never needs cloud sharing */
+async function deviceStoreGet(key){
+  if(CLOUD_AVAILABLE){
+    try{ const r = await window.storage.get(key, false); return r ? r.value : null; }catch(e){ return null; }
+  }
+  try{ return localStorage.getItem(key); }catch(e){ return null; }
+}
+async function deviceStoreSet(key, value){
+  if(CLOUD_AVAILABLE){
+    try{ return await window.storage.set(key, value, false); }catch(e){ return null; }
+  }
+  try{ localStorage.setItem(key, value); return { key, value }; }catch(e){ return null; }
+}
+async function deviceStoreDelete(key){
+  if(CLOUD_AVAILABLE){
+    try{ return await window.storage.delete(key, false); }catch(e){ return null; }
+  }
+  try{ localStorage.removeItem(key); return { key, deleted:true }; }catch(e){ return null; }
+}
+
+function skey(name){ return `hasanpos:${state.shopCode}:${name}`; }
+
+async function storageGetSafe(key){
+  return await rawStoreGet(key);
+}
+
+async function saveProducts(){
+  await rawStoreSet(skey('products'), JSON.stringify(state.products));
+}
+async function saveSales(){
+  await rawStoreSet(skey('sales'), JSON.stringify(state.sales));
+}
+async function saveSettings(){
+  await rawStoreSet(skey('settings'), JSON.stringify(state.settings));
+}
+async function saveCategories(){
+  await rawStoreSet(skey('categories'), JSON.stringify(state.categories));
+}
+async function saveStaff(){
+  await rawStoreSet(skey('staff'), JSON.stringify(state.staff));
+}
+
+/* ---------------- auto-archive old sales ---------------- */
+async function runArchiveCheck(){
+  const days = Number(state.settings.archiveDays) || 90;
+  const cutoff = Date.now() - days*86400000;
+  const raw = await storageGetSafe(skey('sales_archive'));
+  let archive = safeParse(raw, []);
+  const oldOnes = state.sales.filter(s => s.time < cutoff);
+  if(oldOnes.length > 0){
+    archive = archive.concat(oldOnes);
+    state.sales = state.sales.filter(s => s.time >= cutoff);
+    await Promise.all([
+      rawStoreSet(skey('sales_archive'), JSON.stringify(archive)),
+      saveSales(),
+    ]);
+  }
+  state.archivedCount = archive.length;
+}
+
+function seedDemoData(){
+  state.categories = ['အားလုံး','အချိုရည်','နံနက်စာ','ကွမ်းယာ/ဆေးလိပ်','အထွေထွေ'];
+  state.products = [
+    { id: uid(), name:'ကော်ဖီမစ်', category:'အချိုရည်', price:800, stock:40, icon:'☕' },
+    { id: uid(), name:'ရေခဲသောက်ရေ', category:'အချိုရည်', price:300, stock:60, icon:'🧊' },
+    { id: uid(), name:'ဗီစကွတ်', category:'နံနက်စာ', price:1200, stock:22, icon:'🍪' },
+    { id: uid(), name:'ပေါင်မုန့်', category:'နံနက်စာ', price:1500, stock:15, icon:'🍞' },
+    { id: uid(), name:'ကွမ်းယာအစုံ', category:'ကွမ်းယာ/ဆေးလိပ်', price:500, stock:4, icon:'📦' },
+    { id: uid(), name:'စက္ကူတစ်ရှူး', category:'အထွေထွေ', price:1000, stock:30, icon:'🧺' },
+  ];
+  state.sales = [];
+}
+
+function uid(){ return Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4); }
+
+/* Parses stored JSON safely. If a value ever gets corrupted/truncated (e.g. a
+   browser storage quota hiccup), this stops the app from getting permanently
+   stuck — it just falls back to a safe default for that one piece of data
+   instead of throwing and freezing the whole app on every future load. */
+function safeParse(raw, fallback){
+  if(raw === null || raw === undefined || raw === '') return fallback;
+  try{ return JSON.parse(raw); }catch(e){ console.warn('hasanpos: corrupted data recovered with fallback', e); return fallback; }
+}
+
+/* ---------------- load / sync ---------------- */
+async function loadShop(code, {seedIfEmpty=false} = {}){
+  state.shopCode = code;
+  setSyncStatus('syncing');
+  const [pRaw, sRaw, setRaw, catRaw, stRaw] = await Promise.all([
+    storageGetSafe(skey('products')),
+    storageGetSafe(skey('sales')),
+    storageGetSafe(skey('settings')),
+    storageGetSafe(skey('categories')),
+    storageGetSafe(skey('staff')),
+  ]);
+
+  state.products = safeParse(pRaw, []);
+  state.sales = safeParse(sRaw, []);
+  state.categories = safeParse(catRaw, ['အားလုံး']);
+  state.settings = safeParse(setRaw, { currency:'Ks', shopName:'Hasan POS' });
+  state.staff = safeParse(stRaw, []);
+
+  if(!pRaw && seedIfEmpty){
+    seedDemoData();
+    await Promise.all([saveProducts(), saveSales(), saveSettings(), saveCategories()]);
+  }
+
+  await runArchiveCheck();
+
+  try{ await deviceStoreSet('device:shopCode', code); }catch(e){}
+
+  state.activeCategory = state.categories[0] || 'အားလုံး';
+  setSyncStatus('ok');
+  renderTopbar();
+
+  /* This must always run here, not just in createShop()/joinShop() — otherwise
+     reopening the app with an already-created shop leaves the onboarding
+     overlay (which is visible-by-default in CSS) sitting on top of the
+     screen forever, hiding the working app underneath it. */
+  const ob = document.getElementById('onboarding');
+  if(ob) ob.style.display = 'none';
+
+  if(state.staff.length > 0){
+    renderPinLock();
+  } else {
+    state.currentStaffId = null;
+    renderScreen();
+  }
+}
+
+async function manualSync(){
+  if(!state.shopCode) return;
+  setSyncStatus('syncing');
+  const [pRaw, sRaw, setRaw, catRaw, stRaw] = await Promise.all([
+    storageGetSafe(skey('products')),
+    storageGetSafe(skey('sales')),
+    storageGetSafe(skey('settings')),
+    storageGetSafe(skey('categories')),
+    storageGetSafe(skey('staff')),
+  ]);
+  if(pRaw) state.products = safeParse(pRaw, state.products);
+  if(sRaw) state.sales = safeParse(sRaw, state.sales);
+  if(setRaw) state.settings = safeParse(setRaw, state.settings);
+  if(catRaw) state.categories = safeParse(catRaw, state.categories);
+  if(stRaw) state.staff = safeParse(stRaw, state.staff);
+  await runArchiveCheck();
+  setSyncStatus('ok');
+  renderTopbar();
+  renderScreen();
+  showToast('ဒေတာအသစ် sync ပြီးပါပြီ');
+}
+
+function setSyncStatus(s){
+  state.syncStatus = s;
+  if(s === 'ok') state.lastSyncAt = new Date();
+  const dot = document.getElementById('sync-dot');
+  const label = document.getElementById('sync-label');
+  if(!dot) return;
+  dot.className = '';
+  const mode = syncMode();
+  if(s === 'syncing'){ dot.classList.add('syncing'); label.textContent = mode==='local' ? 'သိမ်းနေ…' : 'Syncing…'; }
+  else if(s === 'err'){ dot.classList.add('err'); label.textContent = 'Sync error'; }
+  else {
+    label.textContent = mode==='cloud' ? 'Synced' : mode==='google' ? 'Google Synced' : 'Device Only';
+  }
+}
+
+/* ---------------- onboarding ---------------- */
+async function initApp(){
+  try{
+    const existing = await deviceStoreGet('device:shopCode');
+    if(existing){
+      await loadShop(existing);
+    } else {
+      renderOnboarding();
+    }
+  }catch(err){
+    console.error('hasanpos: failed to start app', err);
+    renderStartupError();
+  }
+}
+
+/* Safety net: if startup ever fails for an unexpected reason, show a recovery
+   screen instead of leaving a blank/frozen page. "ဒေတာအားလုံး ရှင်းမည်" only
+   clears this app's own saved data on this device — not the whole browser —
+   so the person never has to clear all of their browser data to fix it. */
+function renderStartupError(){
+  const ob = document.getElementById('onboarding');
+  if(!ob) return;
+  ob.style.display = 'flex';
+  ob.innerHTML = `
+    <div class="ob-mark">HP</div>
+    <h1>ဖွင့်၍မရပါ</h1>
+    <p>App ဖွင့်ရာတွင် ပြဿနာ တစ်ခုခု ဖြစ်နေပါသည်။ ဒေတာအချို့ ပျက်စီးနေခြင်း ဖြစ်နိုင်ပါသည်။</p>
+    <div class="ob-card">
+      <button class="btn btn-accent btn-block" onclick="location.reload()">ပြန်စမ်းကြည့်မည်</button>
+      <button class="btn btn-outline btn-block" style="margin-top:10px; background:transparent; border-color:#fff; color:#fff;" onclick="recoverFromStartupError()">ဒီ Device ပေါ်ရှိ App ဒေတာအားလုံး ရှင်းပြီး အသစ်ပြန်စမည်</button>
+    </div>
+    <div class="ob-hint">* ဒါက ဒီ app ရဲ့ ဒေတာကိုသာ ရှင်းပါမည် — browser ရဲ့ တခြား data/history များကို ထိခိုက်စေမည် မဟုတ်ပါ။</div>
+  `;
+}
+
+async function recoverFromStartupError(){
+  if(!confirm('ဒီ device ပေါ်ရှိ Hasan POS ဒေတာအားလုံး ဖျက်ပြီး အသစ်ပြန်စမှာသေချာပါသလား?')) return;
+  try{
+    // Clear only this app's own keys (namespaced "hasanpos:") plus the device shop-code pointer.
+    for(let i = localStorage.length - 1; i >= 0; i--){
+      const k = localStorage.key(i);
+      if(k && k.startsWith('hasanpos:')) localStorage.removeItem(k);
+    }
+    await deviceStoreDelete('device:shopCode');
+  }catch(e){}
+  location.reload();
+}
+
+function renderOnboarding(mode){
+  mode = mode || 'create';
+  const ob = document.getElementById('onboarding');
+  ob.style.display = 'flex';
+  ob.innerHTML = `
+    <div class="ob-mark">HP</div>
+    <h1>Hasan POS မှ ကြိုဆိုပါတယ်</h1>
+    <p>ဆိုင်စာရင်းရေးသွင်းသည့် app လေး။ Device အများနဲ့ cloud sync ဖြစ်စေဖို့ "ဆိုင်ကုဒ်" တစ်ခု အသုံးပြုပါမယ်။</p>
+    ${ syncMode()==='local' ? `<div style="background:rgba(255,255,255,0.12); border-radius:12px; padding:12px; margin-top:14px; font-size:12.5px; line-height:1.6;">⚠️ ဒီ device ပေါ်မှာတော့ <b>Local Only</b> mode နဲ့ အလုပ်လုပ်ပါမည် — data ကို ဒီ browser ထဲမှာပဲ သိမ်းထားပြီး အခြား device နှင့် cloud sync မဖြစ်ပါ။ App ကတော့ ပုံမှန်အလုပ်လုပ်ပါမည်၊ Settings ထဲမှာ Google Cloud Sync ကို အခမဲ့ ချိတ်ဆက်နိုင်ပါသည်။</div>` : syncMode()==='google' ? `<div style="background:rgba(255,255,255,0.12); border-radius:12px; padding:12px; margin-top:14px; font-size:12.5px;">✅ Google Cloud Sync ချိတ်ဆက်ထားပြီးဖြစ်သည် — device အားလုံးတွင် ဒေတာ sync ဖြစ်ပါမည်။</div>` : '' }
+    <div class="ob-card">
+      <div class="ob-tabs">
+        <div class="ob-tab ${mode==='create'?'active':''}" onclick="renderOnboarding('create')">ဆိုင်အသစ်ဖွင့်မည်</div>
+        <div class="ob-tab ${mode==='join'?'active':''}" onclick="renderOnboarding('join')">ဆိုင်ကုဒ်ဖြင့်ချိတ်မည်</div>
+      </div>
+      ${ mode==='create' ? `
+        <label style="color:#fff;">ဆိုင်နာမည်</label>
+        <input type="text" id="ob-shopname" placeholder="ဥပမာ - Hasan Mart" value="Hasan Mart">
+        <button class="btn btn-accent btn-block" style="margin-top:16px;" onclick="createShop()">စတင်အသုံးပြုမည်</button>
+      ` : `
+        <label style="color:#fff;">ဆိုင်ကုဒ် ၆ လုံး ထည့်ပါ</label>
+        <input type="text" id="ob-code" placeholder="ဥပမာ - AB12CD" style="text-transform:uppercase; letter-spacing:2px;" maxlength="6">
+        <button class="btn btn-accent btn-block" style="margin-top:16px;" onclick="joinShop()">ချိတ်ဆက်မည်</button>
+      `}
+    </div>
+    <div class="ob-hint">* ဆိုင်ကုဒ်ကို သိသူတိုင်း ဒေတာမြင်နိုင်သောကြောင့် ကုဒ်ကို ယုံကြည်ရသူများကိုသာ ဝေမျှပါ။</div>
+  `;
+}
+
+function genShopCode(){
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let c = '';
+  for(let i=0;i<6;i++) c += chars[Math.floor(Math.random()*chars.length)];
+  return c;
+}
+
+async function createShop(){
+  const nameInput = document.getElementById('ob-shopname');
+  const name = (nameInput.value || 'Hasan Mart').trim();
+  const code = genShopCode();
+  document.getElementById('onboarding').innerHTML = `<div style="text-align:center; margin-top:40px;"><div class="loading-spin"></div><p style="margin-top:14px; opacity:.8;">ဆိုင်တည်ဆောက်နေသည်...</p></div>`;
+  state.shopCode = code;
+  state.settings = { currency: 'Ks', shopName: name };
+  await loadShop(code, { seedIfEmpty:true });
+  document.getElementById('onboarding').style.display = 'none';
+  showToast('ဆိုင်ကုဒ်: ' + code + ' — Settings တွင် ပြန်ကြည့်နိုင်ပါသည်');
+}
+
+async function joinShop(){
+  const input = document.getElementById('ob-code');
+  const code = (input.value || '').trim().toUpperCase();
+  if(code.length < 4){ showToast('ဆိုင်ကုဒ် မှန်ကန်စွာထည့်ပါ'); return; }
+  document.getElementById('onboarding').innerHTML = `<div style="text-align:center; margin-top:40px;"><div class="loading-spin"></div><p style="margin-top:14px; opacity:.8;">ချိတ်ဆက်နေသည်...</p></div>`;
+  await loadShop(code, { seedIfEmpty:false });
+  document.getElementById('onboarding').style.display = 'none';
+  showToast('ဆိုင်ကုဒ် ' + code + ' နှင့် ချိတ်ဆက်ပြီးပါပြီ');
+}
+
+/* ---------------- PIN lock ---------------- */
+function renderPinLock(errMsg){
+  __pinBuffer = '';
+  const el = document.getElementById('pinlock');
+  el.style.display = 'flex';
+  const keys = [1,2,3,4,5,6,7,8,9,'',0,'back'];
+  el.innerHTML = `
+    <div class="pl-mark">🔒</div>
+    <h2>PIN ဖြင့် ဝင်ရောက်ပါ</h2>
+    <div class="pl-sub">${state.settings.shopName || 'Hasan POS'} — ဝန်ထမ်း PIN ၄ လုံး ထည့်ပါ</div>
+    <div class="pl-dots" id="pl-dots">${[0,1,2,3].map(()=>'<div class="pl-dot"></div>').join('')}</div>
+    <div class="pl-err" id="pl-err">${errMsg || ''}</div>
+    <div class="pl-pad">
+      ${keys.map(k => {
+        if(k === '') return `<div class="pl-key empty"></div>`;
+        if(k === 'back') return `<button class="pl-key" onclick="pinBackspace()">⌫</button>`;
+        return `<button class="pl-key" onclick="pinPress(${k})">${k}</button>`;
+      }).join('')}
+    </div>
+    <div class="pl-staff-row">
+      ${state.staff.map(s => `<div class="pl-staff-chip">${s.name}</div>`).join('')}
+    </div>
+  `;
+}
+function pinPress(d){
+  if(__pinBuffer.length >= 4) return;
+  __pinBuffer += String(d);
+  updatePinDots();
+  if(__pinBuffer.length === 4) setTimeout(tryUnlockPin, 120);
+}
+function pinBackspace(){
+  __pinBuffer = __pinBuffer.slice(0,-1);
+  updatePinDots();
+}
+function updatePinDots(){
+  const dots = document.querySelectorAll('#pl-dots .pl-dot');
+  dots.forEach((d,i) => d.classList.toggle('filled', i < __pinBuffer.length));
+}
+function tryUnlockPin(){
+  const match = state.staff.find(s => s.pin === __pinBuffer);
+  if(match){
+    state.currentStaffId = match.id;
+    document.getElementById('pinlock').style.display = 'none';
+    renderTopbar();
+    renderScreen();
+    showToast('ကြိုဆိုပါတယ်၊ ' + match.name);
+  } else {
+    document.getElementById('pl-err').textContent = 'PIN မှားနေပါသည်၊ ပြန်စမ်းကြည့်ပါ';
+    __pinBuffer = '';
+    updatePinDots();
+  }
+}
+function lockNow(){
+  if(state.staff.length === 0){ showToast('ပထမဆုံး Settings တွင် ဝန်ထမ်း ထည့်ပါ'); return; }
+  state.currentStaffId = null;
+  renderPinLock();
+}
+
+/* ---------------- navigation / render ---------------- */
+function goScreen(name){
+  state.activeScreen = name;
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.screen === name));
+  document.getElementById('screen').scrollTop = 0;
+  renderScreen();
+}
+
+function renderTopbar(){
+  document.getElementById('tb-shop-name').textContent = state.settings.shopName || 'Hasan POS';
+  document.getElementById('tb-shop-sub').textContent = 'ဆိုင်ကုဒ်: ' + (state.shopCode || '—');
+  const ind = document.getElementById('staff-indicator');
+  const staff = state.staff.find(s => s.id === state.currentStaffId);
+  if(staff){
+    ind.style.display = 'block';
+    ind.textContent = '👤 ' + staff.name + '  ⏻';
+  } else {
+    ind.style.display = 'none';
+  }
+}
+
+function renderScreen(){
+  const el = document.getElementById('screen');
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.screen === state.activeScreen));
+  if(state.activeScreen === 'dashboard') el.innerHTML = renderDashboard();
+  else if(state.activeScreen === 'pos') { el.innerHTML = renderPOS(); renderCartBar(); }
+  else if(state.activeScreen === 'products') el.innerHTML = renderProducts();
+  else if(state.activeScreen === 'reports') { el.innerHTML = renderReports(); setTimeout(drawChart, 30); }
+  else if(state.activeScreen === 'settings') el.innerHTML = renderSettings();
+}
+
+function fmt(n){
+  n = Math.round(n);
+  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+function money(n){ return fmt(n) + ' ' + (state.settings.currency || 'Ks'); }
+
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(window.__toastTimer);
+  window.__toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+/* ============ DASHBOARD ============ */
+function isSameDay(ts, d){
+  const a = new Date(ts), b = d;
+  return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+}
+function renderDashboard(){
+  const today = new Date();
+  const todaySales = state.sales.filter(s => isSameDay(s.time, today));
+  const todayTotal = todaySales.reduce((a,s)=>a+s.total,0);
+  const orderCount = todaySales.length;
+  const avg = orderCount ? Math.round(todayTotal / orderCount) : 0;
+  const lowStock = state.products.filter(p => p.stock <= LOW_STOCK_THRESHOLD);
+
+  const itemCount = {};
+  todaySales.forEach(s => s.items.forEach(it => { itemCount[it.name] = (itemCount[it.name]||0) + it.qty; }));
+  const topItem = Object.entries(itemCount).sort((a,b)=>b[1]-a[1])[0];
+
+  const recent = [...state.sales].sort((a,b)=>b.time-a.time).slice(0,5);
+
+  return `
+    <div class="hero-card">
+      <div class="hero-label">ယနေ့ ရောင်းအား</div>
+      <div class="hero-value">${money(todayTotal)}</div>
+      <div class="hero-foot">
+        <div><b>${orderCount}</b>အော်ဒါ</div>
+        <div><b>${money(avg)}</b>ပျမ်းမျှ</div>
+        <div><b>${topItem ? topItem[0] : '—'}</b>အရောင်းရဆုံး</div>
+      </div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat-card"><div class="label">ကုန်ပစ္စည်းစုစုပေါင်း</div><div class="value">${state.products.length}</div></div>
+      <div class="stat-card accent"><div class="label">ပစ္စည်းနည်းနေသည်</div><div class="value">${lowStock.length}</div></div>
+    </div>
+
+    ${ lowStock.length ? `
+      <div class="section-title">ပစ္စည်းနည်းနေသည် ⚠️</div>
+      <div class="card">
+        ${ lowStock.slice(0,4).map(p => `
+          <div style="display:flex; justify-content:space-between; padding:6px 0; font-size:13px;">
+            <span>${p.icon} ${p.name}</span>
+            <span class="low-badge">${p.stock} လက်ကျန်</span>
+          </div>
+        `).join('') }
+      </div>
+    ` : ''}
+
+    <div class="section-title">လတ်တလော အရောင်းများ</div>
+    ${ recent.length === 0 ? emptyState('🧾','ရောင်းအားမရှိသေးပါ','"အရောင်း" တဘ်ကနေစတင်ရောင်းချနိုင်ပါတယ်') :
+      recent.map(s => saleRowHTML(s)).join('') }
+  `;
+}
+
+function emptyState(emoji, title, sub){
+  return `<div class="empty-state"><div class="emoji">${emoji}</div><div class="title">${title}</div><div>${sub}</div></div>`;
+}
+
+function saleRowHTML(s){
+  const d = new Date(s.time);
+  const timeStr = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0') + '  ·  ' + d.getDate() + '/' + (d.getMonth()+1);
+  return `
+    <div class="sale-item" onclick="openReceipt('${s.id}')">
+      <div>
+        <div class="si-id">#${s.id.slice(-5).toUpperCase()}</div>
+        <div class="si-time">${timeStr} · ${paymentLabel(s.paymentMethod)}${s.cashierName ? ' · '+s.cashierName : ''}</div>
+      </div>
+      <div class="si-total">${money(s.total)}</div>
+    </div>
+  `;
+}
+function paymentLabel(m){
+  return { cash:'ငွေသား', kpay:'KBZPay', wave:'WavePay', card:'ကတ်' }[m] || m;
+}
+
+/* ---------------- export / backup ---------------- */
+function dateStamp(){
+  const d = new Date();
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+}
+function csvEscape(v){
+  v = String(v === null || v === undefined ? '' : v);
+  if(/[",\n]/.test(v)) v = '"' + v.replace(/"/g,'""') + '"';
+  return v;
+}
+function toCSV(header, rows){
+  const lines = [header.map(csvEscape).join(',')];
+  rows.forEach(r => lines.push(r.map(csvEscape).join(',')));
+  return '\uFEFF' + lines.join('\n'); // BOM so Excel shows Myanmar text correctly
+}
+function downloadFile(filename, content, mime){
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+}
+
+function exportProductsCSV(){
+  if(state.products.length === 0){ showToast('ကုန်ပစ္စည်းမရှိသေးပါ'); return; }
+  const header = ['အမည်','အမျိုးအစား','ဈေးနှုန်း','လက်ကျန်'];
+  const rows = state.products.map(p => [p.name, p.category, p.price, p.stock]);
+  downloadFile(`hasanpos-products-${dateStamp()}.csv`, toCSV(header, rows), 'text/csv;charset=utf-8;');
+  showToast('ကုန်ပစ္စည်းစာရင်း Export ပြီးပါပြီ');
+}
+
+function saleRowsForExport(list){
+  return list.map(s => {
+    const d = new Date(s.time);
+    const itemsStr = s.items.map(it => `${it.name}×${it.qty}`).join('; ');
+    return [ s.id, d.toLocaleDateString('en-CA'), d.toTimeString().slice(0,8), itemsStr, s.subtotal, s.discountPct, s.total, paymentLabel(s.paymentMethod), s.cashierName || '' ];
+  });
+}
+const SALES_CSV_HEADER = ['ID','ရက်စွဲ','အချိန်','ကုန်ပစ္စည်းများ','Subtotal','Discount %','Total','ငွေပေးချေမှု','ရောင်းချသူ'];
+
+function exportSalesCSV(){
+  if(state.sales.length === 0){ showToast('ရောင်းအားမှတ်တမ်း မရှိသေးပါ'); return; }
+  const rows = saleRowsForExport(state.sales);
+  downloadFile(`hasanpos-sales-${dateStamp()}.csv`, toCSV(SALES_CSV_HEADER, rows), 'text/csv;charset=utf-8;');
+  showToast('ရောင်းအားမှတ်တမ်း Export ပြီးပါပြီ');
+}
+
+async function exportArchivedSalesCSV(){
+  const raw = await storageGetSafe(skey('sales_archive'));
+  const archive = safeParse(raw, []);
+  if(archive.length === 0){ showToast('Archive ဒေတာ မရှိသေးပါ'); return; }
+  const rows = saleRowsForExport(archive);
+  downloadFile(`hasanpos-sales-archive-${dateStamp()}.csv`, toCSV(SALES_CSV_HEADER, rows), 'text/csv;charset=utf-8;');
+  showToast('Archive မှတ်တမ်း Export ပြီးပါပြီ');
+}
+
+async function exportFullBackupJSON(){
+  showToast('Backup ပြင်ဆင်နေသည်...');
+  const raw = await storageGetSafe(skey('sales_archive'));
+  const archive = safeParse(raw, []);
+  const backup = {
+    exportedAt: new Date().toISOString(),
+    shopCode: state.shopCode,
+    settings: state.settings,
+    categories: state.categories,
+    products: state.products,
+    staffNames: state.staff.map(s => ({ id: s.id, name: s.name })), // PIN excluded for safety
+    salesActive: state.sales,
+    salesArchived: archive,
+  };
+  downloadFile(`hasanpos-backup-${dateStamp()}.json`, JSON.stringify(backup, null, 2), 'application/json');
+  showToast('အပြည့်အစုံ Backup Export ပြီးပါပြီ');
+}
+
+/* ---------------- bulk import (CSV) ---------------- */
+function parseCSVLine(line){
+  const result = [];
+  let cur = '', inQuotes = false;
+  for(let i=0;i<line.length;i++){
+    const c = line[i];
+    if(inQuotes){
+      if(c === '"'){
+        if(line[i+1] === '"'){ cur += '"'; i++; } else { inQuotes = false; }
+      } else cur += c;
+    } else {
+      if(c === '"') inQuotes = true;
+      else if(c === ','){ result.push(cur); cur = ''; }
+      else cur += c;
+    }
+  }
+  result.push(cur);
+  return result.map(s => s.trim());
+}
+function parseImportCSV(text){
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+  if(lines.length === 0) return [];
+  let startIdx = 0;
+  const firstCells = parseCSVLine(lines[0]).map(c => c.toLowerCase());
+  if(firstCells.some(c => c.includes('name') || c.includes('အမည်') || c.includes('price') || c.includes('ဈေး'))){
+    startIdx = 1;
+  }
+  const items = [];
+  for(let i=startIdx;i<lines.length;i++){
+    const cells = parseCSVLine(lines[i]);
+    const name = (cells[0]||'').trim();
+    if(!name) continue;
+    const category = (cells[1]||'').trim() || 'အထွေထွေ';
+    const price = Number(String(cells[2]||'0').replace(/[,\s]/g,'')) || 0;
+    const stock = Number(String(cells[3]||'0').replace(/[,\s]/g,'')) || 0;
+    const icon = (cells[4]||'').trim();
+    items.push({ name, category, price, stock, icon: ICONS.includes(icon) ? icon : '' });
+  }
+  return items;
+}
+
+function downloadSampleImportCSV(){
+  const header = ['အမည်','အမျိုးအစား','ဈေးနှုန်း','လက်ကျန်'];
+  const rows = [
+    ['ကော်ဖီမစ်','အချိုရည်',800,40],
+    ['ဗီစကွတ်','နံနက်စာ',1200,22],
+    ['ကွမ်းယာအစုံ','ကွမ်းယာ/ဆေးလိပ်',500,15],
+  ];
+  downloadFile('hasanpos-import-sample.csv', toCSV(header, rows), 'text/csv;charset=utf-8;');
+}
+
+function openImportSheet(){
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>ကုန်ပစ္စည်း အများအပြား Import</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div class="si-sub" style="margin-bottom:10px; line-height:1.6;">
+      Excel/Google Sheets မှာ ကော်လံစဉ်လိုက် — <b>အမည်, အမျိုးအစား, ဈေးနှုန်း, လက်ကျန်</b> — ဖြင့်စီပြီး <b>.csv</b> အဖြစ် Save/Export လုပ်ပါ။ ထို့နောက် အောက်မှာ file ကို ရွေးပါ သို့မဟုတ် ကူးထည့်ပါ။
+    </div>
+    <button class="btn btn-ghost btn-block" style="margin-bottom:12px;" onclick="downloadSampleImportCSV()">နမူနာ CSV ဒေါင်းလုပ်ရယူရန်</button>
+
+    <label>CSV File ရွေးပါ</label>
+    <input type="file" id="import-file-input" accept=".csv,text/csv">
+
+    <label>— (သို့) CSV စာသားကို ဒီနေရာတွင် ကူးထည့်ပါ —</label>
+    <textarea id="import-textarea" rows="6" placeholder="အမည်,အမျိုးအစား,ဈေးနှုန်း,လက်ကျန်&#10;ကော်ဖီမစ်,အချိုရည်,800,40"></textarea>
+
+    <div class="pl-err" id="import-err" style="color:var(--danger); font-size:12px; min-height:16px; margin-top:8px;"></div>
+    <div id="import-preview" class="si-sub" style="margin-top:4px;"></div>
+
+    <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="processImport()">Import လုပ်မည်</button>
+  `;
+  document.getElementById('import-file-input').addEventListener('change', function(e){
+    const file = e.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = function(ev){
+      document.getElementById('import-textarea').value = ev.target.result;
+      previewImport();
+    };
+    reader.readAsText(file, 'utf-8');
+  });
+  document.getElementById('import-textarea').addEventListener('input', previewImport);
+  document.getElementById('sheet-overlay').classList.add('show');
+}
+
+function previewImport(){
+  const text = document.getElementById('import-textarea').value;
+  const items = parseImportCSV(text);
+  document.getElementById('import-preview').textContent = items.length ? `${items.length} ခု တွေ့ရှိပါသည်` : '';
+}
+
+async function processImport(){
+  const text = document.getElementById('import-textarea').value;
+  const errEl = document.getElementById('import-err');
+  const items = parseImportCSV(text);
+  if(items.length === 0){ errEl.textContent = 'CSV ဒေတာ မတွေ့ပါ — format ကို စစ်ဆေးပါ'; return; }
+
+  let added = 0, updated = 0;
+  items.forEach(it => {
+    if(!state.categories.includes(it.category)) state.categories.push(it.category);
+    const existing = state.products.find(p => p.name.trim().toLowerCase() === it.name.toLowerCase());
+    if(existing){
+      existing.category = it.category;
+      existing.price = it.price;
+      existing.stock = it.stock;
+      if(it.icon) existing.icon = it.icon;
+      updated++;
+    } else {
+      state.products.push({
+        id: uid(), name: it.name, category: it.category, price: it.price, stock: it.stock,
+        icon: it.icon || ICONS[Math.floor(Math.random()*ICONS.length)],
+      });
+      added++;
+    }
+  });
+
+  setSyncStatus('syncing');
+  await Promise.all([saveProducts(), saveCategories()]);
+  setSyncStatus('ok');
+  closeSheet();
+  renderScreen();
+  showToast(`Import ပြီးပါပြီ — အသစ် ${added} ခု၊ update ${updated} ခု`);
+}
+
+/* ============ POS / SALE ============ */
+function renderPOS(){
+  const cats = state.categories;
+  const filtered = state.products.filter(p => state.activeCategory==='အားလုံး' || p.category === state.activeCategory);
+  return `
+    <div class="search-bar" style="margin-bottom:12px;">
+      <span>🔍</span>
+      <input type="text" id="pos-search" placeholder="ကုန်ပစ္စည်းရှာရန်..." oninput="filterPOSSearch(this.value)">
+    </div>
+    <div class="chip-row" id="cat-chip-row">
+      ${cats.map(c => `<div class="chip ${c===state.activeCategory?'active':''}" onclick="setCategory('${escapeAttr(c)}')">${c}</div>`).join('')}
+    </div>
+    <div class="product-grid" id="pos-grid">
+      ${ filtered.length===0 ? emptyState('📦','ကုန်ပစ္စည်းမရှိပါ','Products တဘ်တွင် ထည့်သွင်းနိုင်ပါသည်') : filtered.map(p => productCardHTML(p)).join('') }
+    </div>
+  `;
+}
+function escapeAttr(s){ return String(s).replace(/'/g,"\\'"); }
+
+function productCardHTML(p){
+  const inCart = state.cart.find(c => c.id === p.id);
+  const out = p.stock <= 0;
+  return `
+    <div class="product-card ${out?'out':''}" onclick="addToCart('${p.id}')">
+      ${ inCart ? `<div class="qty-badge">${inCart.qty}</div>` : '' }
+      <div class="p-icon">${p.icon || '🛒'}</div>
+      <div class="p-name">${p.name}</div>
+      <div class="p-price">${money(p.price)}</div>
+      <div class="p-stock ${p.stock<=LOW_STOCK_THRESHOLD?'low':''}">${out?'ကုန်သွားပြီ':'လက်ကျန် '+p.stock}</div>
+    </div>
+  `;
+}
+
+function filterPOSSearch(q){
+  q = q.trim().toLowerCase();
+  const filtered = state.products.filter(p =>
+    (state.activeCategory==='အားလုံး' || p.category === state.activeCategory) &&
+    p.name.toLowerCase().includes(q)
+  );
+  document.getElementById('pos-grid').innerHTML = filtered.length===0
+    ? emptyState('🔍','ရှာမတွေ့ပါ','အမည်တခြားစမ်းကြည့်ပါ')
+    : filtered.map(p => productCardHTML(p)).join('');
+}
+
+function setCategory(c){
+  state.activeCategory = c;
+  renderScreen();
+}
+
+function addToCart(id){
+  const p = state.products.find(x => x.id === id);
+  if(!p || p.stock <= 0) return;
+  const line = state.cart.find(c => c.id === id);
+  if(line){
+    if(line.qty >= p.stock){ showToast('ကုန်ပစ္စည်း လက်ကျန်မလုံလောက်ပါ'); return; }
+    line.qty++;
+  } else {
+    state.cart.push({ id:p.id, name:p.name, price:p.price, qty:1, icon:p.icon });
+  }
+  renderScreen();
+}
+
+function renderCartBar(){
+  let existing = document.getElementById('cart-bar');
+  if(existing) existing.remove();
+  if(state.cart.length === 0) return;
+  const total = cartTotal();
+  const count = state.cart.reduce((a,c)=>a+c.qty,0);
+  const div = document.createElement('div');
+  div.id = 'cart-bar';
+  div.className = 'show';
+  div.onclick = openCartSheet;
+  div.innerHTML = `
+    <div>
+      <div class="cb-left">${count} ခု ရွေးထားသည်</div>
+      <div class="cb-total">${money(total)}</div>
+    </div>
+    <div class="btn btn-accent">စျေးခြင်းလှည်း ကြည့်ရန် →</div>
+  `;
+  document.getElementById('screen').appendChild(div);
+}
+
+function cartSubtotal(){ return state.cart.reduce((a,c)=>a + c.price*c.qty, 0); }
+function cartTotal(){
+  const sub = cartSubtotal();
+  const disc = sub * (state.discountPct/100);
+  return Math.max(0, sub - disc);
+}
+
+function openCartSheet(){
+  renderCartSheetContent();
+  document.getElementById('sheet-overlay').classList.add('show');
+}
+function closeSheet(){ document.getElementById('sheet-overlay').classList.remove('show'); }
+
+function renderCartSheetContent(){
+  const sub = cartSubtotal();
+  const disc = sub * (state.discountPct/100);
+  const total = cartTotal();
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>စျေးခြင်းလှည်း</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div id="cart-lines">
+      ${ state.cart.length===0 ? emptyState('🛒','လှည်းထဲ ဘာမှမရှိပါ','') : state.cart.map(c => `
+        <div class="cart-line">
+          <div class="cl-icon">${c.icon||'🛒'}</div>
+          <div class="cl-info">
+            <div class="cl-name">${c.name}</div>
+            <div class="cl-price">${money(c.price)}</div>
+          </div>
+          <div class="qty-stepper">
+            <button onclick="changeCartQty('${c.id}',-1)">−</button>
+            <span>${c.qty}</span>
+            <button onclick="changeCartQty('${c.id}',1)">+</button>
+          </div>
+        </div>
+      `).join('') }
+    </div>
+
+    ${ state.cart.length ? `
+      <label>လျှော့စျေး (%)</label>
+      <input type="number" min="0" max="100" value="${state.discountPct}" oninput="setDiscount(this.value)">
+
+      <label>ငွေပေးချေမှုနည်းလမ်း</label>
+      <div class="pay-methods">
+        ${payBtn('cash','💵','ငွေသား')}
+        ${payBtn('kpay','📱','KBZPay')}
+        ${payBtn('wave','🌊','WavePay')}
+        ${payBtn('card','💳','ကတ်')}
+      </div>
+
+      <div style="margin-top:16px;">
+        <div class="summary-row"><span class="muted">စုစုပေါင်း</span><span>${money(sub)}</span></div>
+        ${ disc>0 ? `<div class="summary-row"><span class="muted">လျှော့စျေး</span><span>-${money(disc)}</span></div>` : '' }
+        <div class="summary-row total"><span>ကျသင့်ငွေ</span><span>${money(total)}</span></div>
+      </div>
+
+      <button class="btn btn-primary btn-block" style="margin-top:16px;" onclick="checkout()">အရောင်းပြီးမြောက်ပြီ ✓</button>
+      <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="clearCart()">လှည်းရှင်းမည်</button>
+    ` : '' }
+  `;
+}
+
+function payBtn(val, emoji, label){
+  return `<div class="pay-btn ${state.paymentMethod===val?'active':''}" onclick="setPayment('${val}')"><span class="pe">${emoji}</span>${label}</div>`;
+}
+function setPayment(v){ state.paymentMethod = v; renderCartSheetContent(); }
+function setDiscount(v){ state.discountPct = Math.min(100, Math.max(0, Number(v)||0)); renderCartSheetContent(); }
+
+function changeCartQty(id, delta){
+  const line = state.cart.find(c => c.id === id);
+  if(!line) return;
+  const product = state.products.find(p => p.id === id);
+  line.qty += delta;
+  if(line.qty <= 0){ state.cart = state.cart.filter(c => c.id !== id); }
+  else if(product && line.qty > product.stock){ line.qty = product.stock; showToast('လက်ကျန်ပစ္စည်း ပြည့်သွားပါပြီ'); }
+  renderCartSheetContent();
+  renderCartBar();
+}
+
+function clearCart(){
+  state.cart = [];
+  state.discountPct = 0;
+  closeSheet();
+  renderScreen();
+}
+
+async function checkout(){
+  if(state.cart.length === 0) return;
+  const sub = cartSubtotal();
+  const total = cartTotal();
+  const cashier = state.staff.find(s => s.id === state.currentStaffId);
+  const sale = {
+    id: uid(),
+    time: Date.now(),
+    items: state.cart.map(c => ({ id:c.id, name:c.name, price:c.price, qty:c.qty })),
+    subtotal: sub,
+    discountPct: state.discountPct,
+    total: total,
+    paymentMethod: state.paymentMethod,
+    cashierName: cashier ? cashier.name : null,
+  };
+  state.cart.forEach(c => {
+    const p = state.products.find(x => x.id === c.id);
+    if(p) p.stock = Math.max(0, p.stock - c.qty);
+  });
+  state.sales.push(sale);
+  setSyncStatus('syncing');
+  await Promise.all([saveSales(), saveProducts()]);
+  setSyncStatus('ok');
+
+  state.cart = [];
+  state.discountPct = 0;
+  closeSheet();
+  renderScreen();
+  openReceipt(sale.id, true);
+}
+
+/* ============ RECEIPT ============ */
+function openReceipt(saleId, justCompleted){
+  const s = state.sales.find(x => x.id === saleId);
+  if(!s) return;
+  const d = new Date(s.time);
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>${justCompleted ? 'အရောင်း အောင်မြင်ပါသည် ✓' : 'ဘောက်ချာ'}</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div class="receipt">
+      <div class="r-head">
+        <div class="sn">${state.settings.shopName || 'Hasan POS'}</div>
+        <div class="sd">${d.toLocaleDateString('my-MM')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')} · #${s.id.slice(-5).toUpperCase()}</div>
+      </div>
+      <div class="r-divider"></div>
+      ${ s.items.map(it => `
+        <div class="r-line"><span>${it.name} × ${it.qty}</span><span>${money(it.price*it.qty)}</span></div>
+      `).join('') }
+      <div class="r-divider"></div>
+      <div class="r-line"><span>စုစုပေါင်း</span><span>${money(s.subtotal)}</span></div>
+      ${ s.discountPct>0 ? `<div class="r-line"><span>လျှော့စျေး (${s.discountPct}%)</span><span>-${money(s.subtotal - s.total)}</span></div>` : '' }
+      <div class="r-line r-total"><span>ကျသင့်ငွေ</span><span>${money(s.total)}</span></div>
+      <div class="r-line"><span class="muted">ငွေပေးချေမှု</span><span>${paymentLabel(s.paymentMethod)}</span></div>
+      ${ s.cashierName ? `<div class="r-line"><span class="muted">ရောင်းချသူ</span><span>${s.cashierName}</span></div>` : '' }
+    </div>
+    <button class="btn btn-primary btn-block" style="margin-top:18px;" onclick="closeSheet()">ပြီးပါပြီ</button>
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+}
+
+/* ============ PRODUCTS ============ */
+let productSearchQ = '';
+function renderProducts(){
+  const list = state.products.filter(p => p.name.toLowerCase().includes(productSearchQ.toLowerCase()));
+  return `
+    <div class="search-bar" style="margin-bottom:10px;">
+      <span>🔍</span>
+      <input type="text" placeholder="ကုန်ပစ္စည်းရှာရန်..." value="${productSearchQ}" oninput="onProductSearch(this.value)">
+    </div>
+    <button class="btn btn-ghost btn-block" style="margin-bottom:14px;" onclick="openImportSheet()">📥 CSV မှ ကုန်ပစ္စည်း အများအပြား Import</button>
+    <div id="product-list">
+      ${ list.length===0 ? emptyState('📦','ကုန်ပစ္စည်းမရှိသေးပါ','+ ခလုတ်နှိပ်ပြီး စတင်ထည့်သွင်းပါ') : list.map(p => productListItemHTML(p)).join('') }
+    </div>
+    <div style="height:70px;"></div>
+    <button class="fab" onclick="openProductForm()">+</button>
+  `;
+}
+function onProductSearch(v){
+  productSearchQ = v;
+  const list = state.products.filter(p => p.name.toLowerCase().includes(v.toLowerCase()));
+  document.getElementById('product-list').innerHTML = list.length===0
+    ? emptyState('🔍','ရှာမတွေ့ပါ','')
+    : list.map(p => productListItemHTML(p)).join('');
+}
+
+function productListItemHTML(p){
+  return `
+    <div class="plist-item">
+      <div class="p-icon">${p.icon||'🛒'}</div>
+      <div class="p-info">
+        <div class="name">${p.name} ${p.stock<=LOW_STOCK_THRESHOLD ? '<span class="low-badge">နည်းနေသည်</span>' : ''}</div>
+        <div class="meta">${p.category} · ${money(p.price)} · လက်ကျန် ${p.stock}</div>
+      </div>
+      <div class="p-actions">
+        <div class="icon-btn" onclick="openProductForm('${p.id}')">✎</div>
+        <div class="icon-btn danger" onclick="deleteProduct('${p.id}')">🗑</div>
+      </div>
+    </div>
+  `;
+}
+
+function openProductForm(id){
+  const editing = id ? state.products.find(p => p.id === id) : null;
+  const cats = state.categories.filter(c => c !== 'အားလုံး');
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>${editing ? 'ကုန်ပစ္စည်း ပြင်ဆင်မည်' : 'ကုန်ပစ္စည်း အသစ်ထည့်မည်'}</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+
+    <label>အိုင်ကွန်</label>
+    <div class="chip-row" id="icon-row">
+      ${ICONS.map(ic => `<div class="chip ${ (editing?editing.icon:ICONS[0])===ic ? 'active':''}" data-icon="${ic}" onclick="selectIcon('${ic}')">${ic}</div>`).join('')}
+    </div>
+
+    <label>ကုန်ပစ္စည်းအမည်</label>
+    <input type="text" id="pf-name" value="${editing ? escapeAttr(editing.name) : ''}" placeholder="ဥပမာ - ကော်ဖီမစ်">
+
+    <label>အမျိုးအစား</label>
+    <select id="pf-category">
+      ${cats.map(c => `<option ${editing && editing.category===c ? 'selected':''}>${c}</option>`).join('')}
+      <option value="__new__">+ အမျိုးအစားအသစ်</option>
+    </select>
+    <input type="text" id="pf-newcat" placeholder="အမျိုးအစားအသစ်အမည်" style="display:none; margin-top:8px;">
+
+    <div class="field-row">
+      <div>
+        <label>ဈေးနှုန်း (${state.settings.currency})</label>
+        <input type="number" id="pf-price" value="${editing ? editing.price : ''}" placeholder="0">
+      </div>
+      <div>
+        <label>လက်ကျန်အရေအတွက်</label>
+        <input type="number" id="pf-stock" value="${editing ? editing.stock : ''}" placeholder="0">
+      </div>
+    </div>
+
+    <button class="btn btn-primary btn-block" style="margin-top:18px;" onclick="saveProductForm(${editing ? `'${editing.id}'` : 'null'})">${editing?'သိမ်းမည်':'ထည့်သွင်းမည်'}</button>
+  `;
+  window.__selectedIcon = editing ? editing.icon : ICONS[0];
+  document.getElementById('pf-category').addEventListener('change', function(){
+    document.getElementById('pf-newcat').style.display = this.value === '__new__' ? 'block' : 'none';
+  });
+  document.getElementById('sheet-overlay').classList.add('show');
+}
+function selectIcon(ic){
+  window.__selectedIcon = ic;
+  document.querySelectorAll('#icon-row .chip').forEach(c => c.classList.toggle('active', c.dataset.icon === ic));
+}
+
+async function saveProductForm(id){
+  const name = document.getElementById('pf-name').value.trim();
+  let category = document.getElementById('pf-category').value;
+  const newCat = document.getElementById('pf-newcat').value.trim();
+  const price = Number(document.getElementById('pf-price').value) || 0;
+  const stock = Number(document.getElementById('pf-stock').value) || 0;
+
+  if(!name){ showToast('ကုန်ပစ္စည်းအမည် ထည့်ပါ'); return; }
+  if(category === '__new__'){
+    if(!newCat){ showToast('အမျိုးအစားအမည် ထည့်ပါ'); return; }
+    category = newCat;
+    if(!state.categories.includes(category)) state.categories.push(category);
+  }
+
+  if(id){
+    const p = state.products.find(x => x.id === id);
+    Object.assign(p, { name, category, price, stock, icon: window.__selectedIcon });
+  } else {
+    state.products.push({ id: uid(), name, category, price, stock, icon: window.__selectedIcon });
+  }
+
+  setSyncStatus('syncing');
+  await Promise.all([saveProducts(), saveCategories()]);
+  setSyncStatus('ok');
+  closeSheet();
+  renderScreen();
+  showToast(id ? 'ပြင်ဆင်ပြီးပါပြီ' : 'ထည့်သွင်းပြီးပါပြီ');
+}
+
+async function deleteProduct(id){
+  if(!confirm('ဒီကုန်ပစ္စည်းကို ဖျက်မှာသေချာပါသလား?')) return;
+  state.products = state.products.filter(p => p.id !== id);
+  setSyncStatus('syncing');
+  await saveProducts();
+  setSyncStatus('ok');
+  renderScreen();
+  showToast('ဖျက်ပြီးပါပြီ');
+}
+
+/* ============ REPORTS ============ */
+let __chartInstance = null;
+function last7Days(){
+  const days = [];
+  for(let i=6;i>=0;i--){
+    const d = new Date();
+    d.setDate(d.getDate()-i);
+    d.setHours(0,0,0,0);
+    days.push(d);
+  }
+  return days;
+}
+function renderReports(){
+  const days = last7Days();
+  const totals = days.map(d => state.sales.filter(s => isSameDay(s.time, d)).reduce((a,s)=>a+s.total,0));
+  const weekTotal = totals.reduce((a,b)=>a+b,0);
+
+  const itemCount = {};
+  state.sales.forEach(s => s.items.forEach(it => { itemCount[it.name] = (itemCount[it.name]||0) + it.qty; }));
+  const top = Object.entries(itemCount).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+  return `
+    <div class="stat-grid" style="margin-bottom:16px;">
+      <div class="stat-card"><div class="label">လွန်ခဲ့သော ၇ ရက် ရောင်းအား</div><div class="value">${money(weekTotal)}</div></div>
+      <div class="stat-card accent"><div class="label">အော်ဒါစုစုပေါင်း</div><div class="value">${state.sales.length}</div></div>
+    </div>
+
+    <div class="section-title">နေ့စဉ် ရောင်းအား (၇ ရက်)</div>
+    <div class="card"><canvas id="salesChart" height="160"></canvas></div>
+
+    <div class="section-title">အရောင်းရဆုံး ကုန်ပစ္စည်းများ</div>
+    <div class="card">
+      ${ top.length===0 ? emptyState('📊','ဒေတာမရှိသေးပါ','') : `
+        <table class="table-simple">
+          <tr><th>ကုန်ပစ္စည်း</th><th style="text-align:right;">ရောင်းရသည်</th></tr>
+          ${top.map(([name,qty]) => `<tr><td>${name}</td><td style="text-align:right;">${qty}</td></tr>`).join('')}
+        </table>
+      `}
+    </div>
+  `;
+}
+function drawChart(){
+  const canvas = document.getElementById('salesChart');
+  if(!canvas || typeof Chart === 'undefined') return;
+  const days = last7Days();
+  const labels = days.map(d => d.getDate()+'/'+(d.getMonth()+1));
+  const totals = days.map(d => state.sales.filter(s => isSameDay(s.time, d)).reduce((a,s)=>a+s.total,0));
+  if(__chartInstance) __chartInstance.destroy();
+  __chartInstance = new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: { labels, datasets: [{ data: totals, backgroundColor: '#0B4D3C', borderRadius: 6, maxBarThickness: 28 }] },
+    options: {
+      plugins: { legend: { display:false } },
+      scales: { y: { beginAtZero:true, ticks:{ font:{ size:10 } } }, x: { ticks:{ font:{ size:11 } } } }
+    }
+  });
+}
+
+/* ============ SETTINGS ============ */
+function renderSettings(){
+  return `
+    <div class="section-title">ဆိုင်အချက်အလက်</div>
+    <div class="card">
+      <label>ဆိုင်နာမည်</label>
+      <input type="text" id="st-shopname" value="${escapeAttr(state.settings.shopName||'')}">
+      <label>ငွေကြေးအမှတ်အသား</label>
+      <input type="text" id="st-currency" value="${escapeAttr(state.settings.currency||'Ks')}">
+      <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="saveShopSettings()">သိမ်းမည်</button>
+    </div>
+
+    <div class="section-title">${ syncMode()==='cloud' ? 'Cloud Sync' : syncMode()==='google' ? 'Google Cloud Sync' : 'ဒေတာသိမ်းဆည်းမှု' }</div>
+    <div class="card">
+      ${ syncMode()==='local' ? `
+        <div class="si-sub" style="background:var(--danger-tint); color:var(--danger); padding:10px; border-radius:var(--radius-sm); margin-bottom:12px; font-weight:600;">
+          ⚠️ ဒီ device ပေါ်မှာ "Local Only" mode နဲ့ အလုပ်လုပ်နေပါသည် — data ကို ဒီ browser ထဲမှာပဲ သိမ်းထားပြီး device တခြားနှင့် cloud sync မဖြစ်ပါ။
+        </div>
+      ` : '' }
+      ${ syncMode()==='google' ? `
+        <div class="si-sub" style="background:var(--primary-tint); color:var(--primary-dark); padding:10px; border-radius:var(--radius-sm); margin-bottom:12px; font-weight:600;">
+          ✅ Google Sheet ဖြင့် Cloud Sync ချိတ်ဆက်ထားပါသည် — device ဘယ်နှစ်ခုနှင့်မဆို sync ဖြစ်ပါမည်။
+        </div>
+      ` : '' }
+      <div class="settings-item">
+        <div><div class="si-label">ဆိုင်ကုဒ်</div><div class="si-sub">Device တခြားများတွင် ဒီကုဒ်ဖြင့် ချိတ်ဆက်နိုင်သည်</div></div>
+      </div>
+      <div class="code-box">
+        <span class="code">${state.shopCode}</span>
+        <button class="btn btn-ghost btn-sm" onclick="copyCode()">ကူးမည်</button>
+      </div>
+      <button class="btn btn-outline btn-block" style="margin-top:12px;" onclick="manualSync()">${ syncMode()==='local' ? 'ပြန်လည်ဖတ်ရှုမည်' : 'ယခုပင် Sync လုပ်မည်' }</button>
+      <div class="si-sub" style="margin-top:8px; text-align:center;">နောက်ဆုံး ${ syncMode()==='local' ? 'သိမ်းဆည်း' : 'sync' } − ${state.lastSyncAt ? state.lastSyncAt.toLocaleTimeString('my-MM') : '—'}</div>
+
+      ${ syncMode() !== 'cloud' ? `
+        <button class="btn ${syncMode()==='google' ? 'btn-ghost' : 'btn-accent'} btn-block" style="margin-top:12px;" onclick="openGoogleSyncSetup()">
+          ${ syncMode()==='google' ? '⚙️ Google Sync ဆက်တင်' : '🔗 Google ဖြင့် Cloud Sync ချိတ်ဆက်ရန်' }
+        </button>
+      ` : '' }
+    </div>
+
+    <div class="section-title">အခြား Device တွင် ဖွင့်ရန်</div>
+    <div class="card">
+      <div class="si-sub">${
+        syncMode()==='cloud' ? `အခြားဖုန်း/ကွန်ပျူတာမှ ဒီ app ကိုဖွင့်ပြီး "ဆိုင်ကုဒ်ဖြင့်ချိတ်မည်" ကိုနှိပ်ကာ ကုဒ် <b>${state.shopCode}</b> ထည့်ပါ — ကုန်ပစ္စည်းနှင့် ရောင်းအားမှတ်တမ်းများ အလိုအလျောက် sync ဖြစ်ပါမည်။`
+        : syncMode()==='google' ? `အခြား device တွင် ဒီ app file ကို ဖွင့်ပြီး Settings > Google Sync ထဲ <b>တူညီသော Web App URL</b> ကို ထည့်ကာ ချိတ်ဆက်ပါ — ပြီးရင် ဆိုင်ကုဒ် <b>${state.shopCode}</b> နှင့် join ရိုက်ထည့်ပါ။`
+        : `ဒီ device မှာတော့ Local Only mode ဖြစ်နေတဲ့အတွက် အခြား device တွင် ချိတ်ဆက်၍ မရသေးပါ။ အပေါ်က "Google ဖြင့် Cloud Sync ချိတ်ဆက်ရန်" ကိုနှိပ်ပြီး အခမဲ့ setup လုပ်နိုင်ပါသည် — ဒါမှမဟုတ် "Export & Backup" ဖြင့် backup file ကို အခြား device သို့ ကူးယူနိုင်ပါသည်။`
+      }</div>
+    </div>
+
+    <div class="section-title">ဝန်ထမ်းနှင့် PIN ကာကွယ်မှု</div>
+    <div class="card">
+      <div class="si-sub" style="margin-bottom:10px;">ဝန်ထမ်း ထည့်လိုက်ပါက app ဖွင့်တိုင်း PIN ၄ လုံး ထည့်ရမည်ဖြစ်ပြီး ရောင်းစာရင်းတွင် ဝန်ထမ်းအမည် မှတ်တမ်းတင်ပါမည်။</div>
+      <div id="staff-list">
+        ${ state.staff.length===0 ? `<div class="si-sub">ဝန်ထမ်းမထည့်ရသေးပါ — ယခုလောလောဆယ် PIN မလိုအပ်ပါ</div>` :
+          state.staff.map(s => `
+            <div class="staff-row">
+              <div class="sr-avatar">${s.name.slice(0,1)}</div>
+              <div class="sr-info">
+                <div class="sr-name">${s.name}</div>
+                <div class="sr-pin">PIN: • • • •</div>
+              </div>
+              <div class="p-actions">
+                <div class="icon-btn" onclick="openStaffForm('${s.id}')">✎</div>
+                <div class="icon-btn danger" onclick="deleteStaff('${s.id}')">🗑</div>
+              </div>
+            </div>
+          `).join('') }
+      </div>
+      <button class="btn btn-ghost btn-block" style="margin-top:12px;" onclick="openStaffForm()">+ ဝန်ထမ်းအသစ်ထည့်မည်</button>
+      ${ state.staff.length>0 ? `<button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="lockNow()">ယခုပင် Lock လုပ်မည်</button>` : '' }
+    </div>
+
+    <div class="section-title">ဒေတာ Export & Backup</div>
+    <div class="card">
+      <div class="si-sub" style="margin-bottom:10px;">စာရင်းကိုင်၊ backup၊ accountant ကိုပို့ရန်စတာတွေအတွက် ဒေတာများကို file အဖြစ် ဒေါင်းလုပ်ဆွဲယူနိုင်ပါတယ်။</div>
+      <button class="btn btn-outline btn-block" onclick="exportProductsCSV()">ကုန်ပစ္စည်းစာရင်း Export (CSV)</button>
+      <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="exportSalesCSV()">ရောင်းအားမှတ်တမ်း Export (CSV)</button>
+      <button class="btn btn-primary btn-block" style="margin-top:8px;" onclick="exportFullBackupJSON()">အပြည့်အစုံ Backup Export (JSON)</button>
+      <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="openImportSheet()">📥 CSV မှ ကုန်ပစ္စည်း Import</button>
+    </div>
+
+    <div class="section-title">ရောင်းအားမှတ်တမ်းဟောင်း — Auto-Archive</div>
+    <div class="card">
+      <div class="si-sub" style="margin-bottom:10px;">App မြန်ဆန်ပြီး ဒေတာနေရာ ကျန်ရှိနေစေရန် သတ်မှတ်ရက်ထက်ကြာသော ရောင်းအားမှတ်တမ်းများကို Archive သို့ အလိုအလျောက် ရွှေ့ပေးပါမည်။ Dashboard/Report များတွင် လက်ရှိ (Active) မှတ်တမ်းများကိုသာ ပြသပါမည်— Archive ဒေတာများကို ဆုံးရှုံးမည်မဟုတ်ဘဲ Export ဖြင့် အမြဲရယူနိုင်ပါသည်။</div>
+      <label>ရက်ပေါင်း ဘယ်လောက်ကြာလျှင် Archive လုပ်မည်</label>
+      <input type="number" id="st-archivedays" value="${state.settings.archiveDays || 90}" min="7">
+      <div class="settings-item" style="margin-top:8px;">
+        <div><div class="si-label">Archive ရောက်ရှိပြီးသား မှတ်တမ်း</div><div class="si-sub">${fmt(state.archivedCount||0)} ခု</div></div>
+      </div>
+      <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="exportArchivedSalesCSV()">Archive မှတ်တမ်း Export (CSV)</button>
+    </div>
+
+    <div class="section-title">ဒေတာစီမံခန့်ခွဲမှု</div>
+    <div class="card">
+      <button class="btn btn-danger-outline btn-block" onclick="resetShopData()">ဒေတာအားလုံး ပြန်လည်စတင်မည်</button>
+      <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="switchShop()">တခြားဆိုင်သို့ ပြောင်းမည်</button>
+    </div>
+
+    <div class="section-title">Hasan POS အကြောင်း</div>
+    <div class="card si-sub">
+      Hasan POS v1.0 — ဆိုင်အသေးစားများအတွက် အရောင်းစီမံခန့်ခွဲမှု app။ ဒေတာများကို cloud တွင် သိမ်းဆည်းပြီး ဆိုင်ကုဒ်တူညီသော device များအားလုံးတွင် sync ဖြစ်ပါသည်။
+    </div>
+  `;
+}
+
+async function saveShopSettings(){
+  state.settings.shopName = document.getElementById('st-shopname').value.trim() || 'Hasan POS';
+  state.settings.currency = document.getElementById('st-currency').value.trim() || 'Ks';
+  const daysInput = document.getElementById('st-archivedays');
+  if(daysInput) state.settings.archiveDays = Math.max(7, Number(daysInput.value) || 90);
+  setSyncStatus('syncing');
+  await saveSettings();
+  await runArchiveCheck();
+  setSyncStatus('ok');
+  renderTopbar();
+  renderScreen();
+  showToast('ဆက်တင်များ သိမ်းပြီးပါပြီ');
+}
+
+/* Robust clipboard copy. navigator.clipboard needs a "secure context" (https,
+   or localhost) — a file:// page (a downloaded .html file opened directly)
+   does not count, so navigator.clipboard can be missing or silently reject
+   there. This tries the modern API first, then falls back to a hidden
+   textarea + document.execCommand('copy'), which does work on file://. */
+async function copyTextToClipboard(text){
+  if(navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext){
+    try{ await navigator.clipboard.writeText(text); return true; }catch(e){ /* fall through to fallback */ }
+  }
+  try{
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    ta.style.left = '-1000px';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  }catch(e){
+    return false;
+  }
+}
+
+async function copyCode(){
+  const ok = await copyTextToClipboard(state.shopCode);
+  showToast(ok ? 'ကုဒ်ကူးပြီးပါပြီ' : 'ကူး၍မရပါ — ကုဒ်ကို ကိုယ်တိုင် highlight လုပ်ပြီး ကူးပါ: ' + state.shopCode);
+}
+
+function openStaffForm(id){
+  const editing = id ? state.staff.find(s => s.id === id) : null;
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>${editing ? 'ဝန်ထမ်း ပြင်ဆင်မည်' : 'ဝန်ထမ်းအသစ်ထည့်မည်'}</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <label>ဝန်ထမ်းအမည်</label>
+    <input type="text" id="sf-name" value="${editing ? escapeAttr(editing.name) : ''}" placeholder="ဥပမာ - မမမ">
+    <label>PIN (ဂဏန်း ၄ လုံး)</label>
+    <input type="text" id="sf-pin" inputmode="numeric" maxlength="4" pattern="[0-9]*" value="${editing ? editing.pin : ''}" placeholder="ဥပမာ - 1234">
+    <div class="pl-err" id="sf-err" style="color:var(--danger); font-size:12px; height:16px; margin-top:6px;"></div>
+    <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="saveStaffForm(${editing ? `'${editing.id}'` : 'null'})">${editing?'သိမ်းမည်':'ထည့်သွင်းမည်'}</button>
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+}
+
+async function saveStaffForm(id){
+  const name = document.getElementById('sf-name').value.trim();
+  const pin = document.getElementById('sf-pin').value.trim();
+  const errEl = document.getElementById('sf-err');
+  if(!name){ errEl.textContent = 'ဝန်ထမ်းအမည် ထည့်ပါ'; return; }
+  if(!/^\d{4}$/.test(pin)){ errEl.textContent = 'PIN သည် ဂဏန်း ၄ လုံး ဖြစ်ရပါမည်'; return; }
+  const dup = state.staff.find(s => s.pin === pin && s.id !== id);
+  if(dup){ errEl.textContent = 'ဒီ PIN ကို ' + dup.name + ' အသုံးပြုနေပါသည်'; return; }
+
+  if(id){
+    const s = state.staff.find(x => x.id === id);
+    Object.assign(s, { name, pin });
+  } else {
+    state.staff.push({ id: uid(), name, pin });
+  }
+  setSyncStatus('syncing');
+  await saveStaff();
+  setSyncStatus('ok');
+  closeSheet();
+  renderScreen();
+  showToast(id ? 'ဝန်ထမ်းအချက်အလက် သိမ်းပြီးပါပြီ' : 'ဝန်ထမ်းအသစ်ထည့်ပြီးပါပြီ');
+}
+
+async function deleteStaff(id){
+  if(!confirm('ဒီဝန်ထမ်းကို ဖျက်မှာသေချာပါသလား?')) return;
+  state.staff = state.staff.filter(s => s.id !== id);
+  if(state.currentStaffId === id) state.currentStaffId = null;
+  setSyncStatus('syncing');
+  await saveStaff();
+  setSyncStatus('ok');
+  renderTopbar();
+  renderScreen();
+  showToast('ဝန်ထမ်း ဖျက်ပြီးပါပြီ');
+}
+
+async function resetShopData(){
+  if(!confirm('ကုန်ပစ္စည်းနှင့် ရောင်းအားမှတ်တမ်း အားလုံး ဖျက်မှာသေချာပါသလား? ဤလုပ်ဆောင်ချက်ကို ပြန်ဖျက်၍မရပါ။')) return;
+  state.products = [];
+  state.sales = [];
+  state.categories = ['အားလုံး'];
+  state.staff = [];
+  state.currentStaffId = null;
+  state.archivedCount = 0;
+  setSyncStatus('syncing');
+  await Promise.all([saveProducts(), saveSales(), saveCategories(), saveStaff(), rawStoreSet(skey('sales_archive'), JSON.stringify([]))]);
+  setSyncStatus('ok');
+  renderTopbar();
+  renderScreen();
+  showToast('ဒေတာအားလုံး ရှင်းလင်းပြီးပါပြီ');
+}
+
+/* ---------------- Google Apps Script sync setup ---------------- */
+async function copyAppsScriptCode(){
+  const ok = await copyTextToClipboard(APPS_SCRIPT_CODE);
+  if(ok){
+    showToast('Code ကူးပြီးပါပြီ — script.google.com ထဲ ကပ်ထည့်ပါ');
+  } else {
+    showAppsScriptCodeManualCopy();
+  }
+}
+
+/* Last-resort fallback when even execCommand('copy') is blocked (some mobile
+   browsers restrict clipboard access entirely). Shows the code in a
+   pre-selected textarea inside the sheet so the person can copy it manually
+   with a long-press / Ctrl+C instead of the button appearing to do nothing. */
+function showAppsScriptCodeManualCopy(){
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>Code ကို ကိုယ်တိုင်ကူးပါ</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div class="si-sub" style="margin-bottom:10px;">အလိုအလျောက် ကူး၍မရသောကြောင့် အောက်ကနေ ရွေးပြီး ကူးပေးပါ (နှိပ်ထားရင် အားလုံး ရွေးပါလိမ့်မည်)</div>
+    <textarea id="asc-manual-copy" readonly style="width:100%; height:260px; font-family:monospace; font-size:12px;" onclick="this.select()"></textarea>
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+  const ta = document.getElementById('asc-manual-copy');
+  ta.value = APPS_SCRIPT_CODE;
+  ta.focus();
+  ta.select();
+}
+
+function openGoogleSyncSetup(){
+  const currentUrl = getRemoteUrl();
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>Google ဖြင့် Cloud Sync လုပ်ရန်</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div class="si-sub" style="line-height:1.7;">
+      Google account (အခမဲ့) သုံးပြီး ကိုယ်ပိုင် cloud database လေးတစ်ခု ဖန်တီးလိုက်ရင် device ဘယ်နှစ်ခုနဲ့မဆို sync ဖြစ်ပါမယ် — Claude chat ကို လုံးဝပြန်ဖွင့်စရာ မလိုတော့ပါ။
+    </div>
+    <div class="section-title" style="margin-top:16px;">အဆင့် ၁ — Apps Script ဖန်တီးမည်</div>
+    <div class="si-sub" style="line-height:1.7;">
+      1) <b>script.google.com</b> ကိုသွားပြီး Google account ဖြင့် login ဝင်ပါ<br>
+      2) "New project" နှိပ်ပါ<br>
+      3) ပေါ်လာတဲ့ code အားလုံးကို ဖျက်ပြီး အောက်က "Code ကူးမည်" ခလုတ်ဖြင့် ကူးထားတဲ့ code ကို ကပ်ထည့်ပါ<br>
+      4) ⌘S / Ctrl+S နှိပ်ပြီး Project အမည် "Hasan POS Backend" ဟု ပေးပါ
+    </div>
+    <button class="btn btn-primary btn-block" style="margin-top:10px;" onclick="copyAppsScriptCode()">📋 Code ကူးမည်</button>
+
+    <div class="section-title" style="margin-top:16px;">အဆင့် ၂ — Web App အဖြစ် Deploy လုပ်မည်</div>
+    <div class="si-sub" style="line-height:1.7;">
+      1) ညာဘက်အပေါ်က <b>Deploy → New deployment</b> ကိုနှိပ်ပါ<br>
+      2) Type ကို ⚙️ (gear icon) နှိပ်ပြီး <b>Web app</b> ရွေးပါ<br>
+      3) "Execute as" → <b>Me</b>, "Who has access" → <b>Anyone</b> ရွေးပါ<br>
+      4) <b>Deploy</b> နှိပ်ပြီး Google က ဆောင်ရွက်ခွင့်တောင်းရင် <b>Authorize access</b> → ကိုယ့် account ရွေး → "Advanced" → "Go to Hasan POS Backend (unsafe)" → Allow နှိပ်ပါ (ကိုယ်တိုင်ရေးထားတဲ့ script မို့ ပူပန်စရာမလိုပါ)<br>
+      5) ထွက်လာတဲ့ <b>Web app URL</b> (https://script.google.com/macros/... /exec ဖြင့်ဆုံးမည်) ကို ကူးထားပါ
+    </div>
+
+    <div class="section-title" style="margin-top:16px;">အဆင့် ၃ — URL ကို ဒီနေရာတွင် ထည့်ပါ</div>
+    <label>Web App URL</label>
+    <input type="text" id="remote-url-input" placeholder="https://script.google.com/macros/s/xxxxx/exec" value="${escapeAttr(currentUrl)}">
+    <div class="pl-err" id="remote-url-err" style="color:var(--danger); font-size:12px; min-height:16px; margin-top:6px;"></div>
+    <button class="btn btn-accent btn-block" style="margin-top:10px;" onclick="testAndSaveRemoteUrl()">Connect လုပ်ပြီး သိမ်းမည်</button>
+    ${ currentUrl ? `<button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="disconnectRemoteUrl()">Google Sync ဖြုတ်မည်</button>` : '' }
+    <div class="si-sub" style="margin-top:12px;">* ဒီ URL ကို device တိုင်းမှာ တူတူထည့်ရပါမယ် — ဆိုင်ကုဒ်လိုပဲ လုံခြုံစွာ သိမ်းထားပါ။ Data အားလုံးကို ကိုယ့် Google Sheet ထဲမှာသာ သိမ်းထားခြင်းဖြစ်သောကြောင့် ကိုယ်တိုင် အပြည့်အစိုး ထိန်းချုပ်ထားနိုင်ပါသည်။</div>
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+}
+
+async function testAndSaveRemoteUrl(){
+  const input = document.getElementById('remote-url-input');
+  const url = input.value.trim();
+  const errEl = document.getElementById('remote-url-err');
+  if(!/^https:\/\/script\.google(usercontent)?\.com\//.test(url)){
+    errEl.textContent = 'URL မှန်ကန်မှု မရှိပါ — script.google.com link ကို ကူးထည့်ပါ';
+    return;
+  }
+  errEl.textContent = 'စစ်ဆေးနေသည်...';
+  try{
+    const testKey = 'hasanpos:__connection_test__';
+    const res = await fetch(url, {
+      method:'POST',
+      headers: { 'Content-Type':'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action:'set', key: testKey, value: 'ok' }),
+    });
+    if(!res.ok) throw new Error('bad response');
+    const check = await fetch(url + '?key=' + encodeURIComponent(testKey));
+    const text = await check.text();
+    if(text !== 'ok') throw new Error('mismatch');
+  }catch(e){
+    errEl.textContent = 'ချိတ်ဆက်မရပါ — Deploy setting (Anyone access) ကို ပြန်စစ်ပါ';
+    return;
+  }
+  setRemoteUrlLocal(url);
+  showToast('Google Sync ချိတ်ဆက်ပြီးပါပြီ! ပြန်စတင်နေသည်...');
+  setTimeout(() => location.reload(), 900);
+}
+
+function disconnectRemoteUrl(){
+  if(!confirm('Google Sync ကို ဖြုတ်မှာသေချာပါသလား? (Local device data ကတော့ မပျောက်ပါ)')) return;
+  setRemoteUrlLocal('');
+  showToast('ဖြုတ်ပြီးပါပြီ — ပြန်စတင်နေသည်...');
+  setTimeout(() => location.reload(), 700);
+}
+
+async function switchShop(){
+  if(!confirm('တခြားဆိုင်ကုဒ်ဖြင့် ပြောင်းမှာသေချာပါသလား?')) return;
+  try{ await deviceStoreDelete('device:shopCode'); }catch(e){}
+  state.shopCode = null;
+  document.getElementById('onboarding').style.display = 'flex';
+  renderOnboarding('join');
+}
+
+/* ---------------- boot ---------------- */
+document.addEventListener('DOMContentLoaded', initApp);
+</script>
+</body>
+</html>
