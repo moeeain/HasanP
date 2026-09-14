@@ -445,6 +445,7 @@ let state = {
   products: [],
   sales: [],
   categories: ['အားလုံး'],
+  costUnits: ['ပိသာ','ပြည်','အိတ်'],
   cart: [],           // {id, name, price, qty, icon}
   activeCategory: 'အားလုံး',
   activeScreen: 'dashboard',
@@ -581,6 +582,18 @@ async function storageGetSafe(key){
    records how many chunks exist (and cleans up any now-unused chunks). */
 const PRODUCTS_CHUNK_SIZE = 150;
 
+/* Older versions stored cost as three separate fixed fields (per-viss,
+   per-pyi, per-bag). This folds any of those into the new single
+   costUnit/costValue pair so existing product data keeps working. */
+function migrateLegacyCostFields(){
+  state.products.forEach(p => {
+    if(p.costUnit) return; // already on the new schema
+    if(p.costViss){ p.costUnit = 'ပိသာ'; p.costValue = p.costViss; }
+    else if(p.costPyi){ p.costUnit = 'ပြည်'; p.costValue = p.costPyi; }
+    else if(p.costBag){ p.costUnit = 'အိတ်'; p.costValue = p.costBag; }
+  });
+}
+
 async function saveProducts(){
   const chunks = [];
   for(let i=0;i<state.products.length;i+=PRODUCTS_CHUNK_SIZE){
@@ -638,6 +651,9 @@ async function saveSettings(){
 async function saveCategories(){
   await rawStoreSet(skey('categories'), JSON.stringify(state.categories));
 }
+async function saveCostUnits(){
+  await rawStoreSet(skey('costUnits'), JSON.stringify(state.costUnits));
+}
 async function saveStaff(){
   await rawStoreSet(skey('staff'), JSON.stringify(state.staff));
 }
@@ -688,17 +704,20 @@ function safeParse(raw, fallback){
 async function loadShop(code, {seedIfEmpty=false} = {}){
   state.shopCode = code;
   setSyncStatus('syncing');
-  const [pList, sRaw, setRaw, catRaw, stRaw] = await Promise.all([
+  const [pList, sRaw, setRaw, catRaw, cuRaw, stRaw] = await Promise.all([
     loadProductsFromStorage(),
     storageGetSafe(skey('sales')),
     storageGetSafe(skey('settings')),
     storageGetSafe(skey('categories')),
+    storageGetSafe(skey('costUnits')),
     storageGetSafe(skey('staff')),
   ]);
 
   state.products = pList || [];
+  migrateLegacyCostFields();
   state.sales = safeParse(sRaw, []);
   state.categories = safeParse(catRaw, ['အားလုံး']);
+  state.costUnits = safeParse(cuRaw, ['ပိသာ','ပြည်','အိတ်']);
   state.settings = safeParse(setRaw, { currency:'Ks', shopName:'Hasan POS' });
   state.staff = safeParse(stRaw, []);
 
@@ -733,17 +752,19 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
 async function manualSync(){
   if(!state.shopCode) return;
   setSyncStatus('syncing');
-  const [pList, sRaw, setRaw, catRaw, stRaw] = await Promise.all([
+  const [pList, sRaw, setRaw, catRaw, cuRaw, stRaw] = await Promise.all([
     loadProductsFromStorage(),
     storageGetSafe(skey('sales')),
     storageGetSafe(skey('settings')),
     storageGetSafe(skey('categories')),
+    storageGetSafe(skey('costUnits')),
     storageGetSafe(skey('staff')),
   ]);
-  if(pList) state.products = pList;
+  if(pList){ state.products = pList; migrateLegacyCostFields(); }
   if(sRaw) state.sales = safeParse(sRaw, state.sales);
   if(setRaw) state.settings = safeParse(setRaw, state.settings);
   if(catRaw) state.categories = safeParse(catRaw, state.categories);
+  if(cuRaw) state.costUnits = safeParse(cuRaw, state.costUnits);
   if(stRaw) state.staff = safeParse(stRaw, state.staff);
   await runArchiveCheck();
   setSyncStatus('ok');
@@ -1078,11 +1099,11 @@ function downloadFile(filename, content, mime){
 
 function exportProductsCSV(){
   if(state.products.length === 0){ showToast('ကုန်ပစ္စည်းမရှိသေးပါ'); return; }
-  const header = ['အမည်','အမျိုးအစား','ဈေးနှုန်း(လက်လီ)','လက်ကျန်','ရောင်းဈေး(လက်ကား)','ရောင်းဈေး(VIP)','ဝယ်ဈေး(1ပိသာ)','ဝယ်ဈေး(1ပြည်)','ဝယ်ဈေး(1အိတ်)'];
+  const header = ['အမည်','အမျိုးအစား','ဈေးနှုန်း(လက်လီ)','လက်ကျန်','ရောင်းဈေး(လက်ကား)','ရောင်းဈေး(VIP)','ဝယ်ဈေးယူနစ်','ဝယ်ဈေး'];
   const rows = state.products.map(p => [
     p.name, p.category, p.price, p.stock,
     p.priceWholesale || '', p.priceVIP || '',
-    p.costViss || '', p.costPyi || '', p.costBag || '',
+    p.costUnit || '', p.costValue || '',
   ]);
   downloadFile(`hasanpos-products-${dateStamp()}.csv`, toCSV(header, rows), 'text/csv;charset=utf-8;');
   showToast('ကုန်ပစ္စည်းစာရင်း Export ပြီးပါပြီ');
@@ -1170,10 +1191,9 @@ function parseImportCSV(text){
     // optional extra columns (all backward-compatible — older 4/5-column CSVs still work)
     const priceWholesale = Number(String(cells[5]||'0').replace(/[,\s]/g,'')) || 0;
     const priceVIP = Number(String(cells[6]||'0').replace(/[,\s]/g,'')) || 0;
-    const costViss = Number(String(cells[7]||'0').replace(/[,\s]/g,'')) || 0;
-    const costPyi = Number(String(cells[8]||'0').replace(/[,\s]/g,'')) || 0;
-    const costBag = Number(String(cells[9]||'0').replace(/[,\s]/g,'')) || 0;
-    items.push({ name, category, price, stock, icon: ICONS.includes(icon) ? icon : '', priceWholesale, priceVIP, costViss, costPyi, costBag });
+    const costUnit = (cells[7]||'').trim();
+    const costValue = Number(String(cells[8]||'0').replace(/[,\s]/g,'')) || 0;
+    items.push({ name, category, price, stock, icon: ICONS.includes(icon) ? icon : '', priceWholesale, priceVIP, costUnit, costValue });
   }
   return items;
 }
@@ -1237,6 +1257,7 @@ async function processImport(){
   let added = 0, updated = 0;
   items.forEach(it => {
     if(!state.categories.includes(it.category)) state.categories.push(it.category);
+    if(it.costUnit && !state.costUnits.includes(it.costUnit)) state.costUnits.push(it.costUnit);
     const existing = state.products.find(p => p.name.trim().toLowerCase() === it.name.toLowerCase());
     if(existing){
       existing.category = it.category;
@@ -1245,23 +1266,22 @@ async function processImport(){
       if(it.icon) existing.icon = it.icon;
       if(it.priceWholesale) existing.priceWholesale = it.priceWholesale;
       if(it.priceVIP) existing.priceVIP = it.priceVIP;
-      if(it.costViss) existing.costViss = it.costViss;
-      if(it.costPyi) existing.costPyi = it.costPyi;
-      if(it.costBag) existing.costBag = it.costBag;
+      if(it.costUnit) existing.costUnit = it.costUnit;
+      if(it.costValue) existing.costValue = it.costValue;
       updated++;
     } else {
       state.products.push({
         id: uid(), name: it.name, category: it.category, price: it.price, stock: it.stock,
         icon: it.icon || ICONS[Math.floor(Math.random()*ICONS.length)],
         priceWholesale: it.priceWholesale, priceVIP: it.priceVIP,
-        costViss: it.costViss, costPyi: it.costPyi, costBag: it.costBag,
+        costUnit: it.costUnit, costValue: it.costValue,
       });
       added++;
     }
   });
 
   setSyncStatus('syncing');
-  await Promise.all([saveProducts(), saveCategories()]);
+  await Promise.all([saveProducts(), saveCategories(), saveCostUnits()]);
   setSyncStatus('ok');
   closeSheet();
   renderScreen();
@@ -1586,19 +1606,19 @@ function openProductForm(id){
     </select>
     <input type="text" id="pf-newcat" placeholder="အမျိုးအစားအသစ်အမည်" style="display:none; margin-top:8px;">
 
-    <label style="margin-top:14px; display:block; font-weight:700;">ဝယ်ဈေး (ကုန်ကျစရိတ် — သက်ဆိုင်ရာအလိုက် တစ်ခုပဲ ဖြည့်ရင်လည်းရသည်)</label>
-    <div class="field-row-3">
+    <label style="margin-top:14px; display:block; font-weight:700;">ဝယ်ဈေး (ကုန်ကျစရိတ်)</label>
+    <div class="field-row">
       <div>
-        <label>1 ပိသာ ဈေး</label>
-        <input type="number" id="pf-cost-viss" value="${editing && editing.costViss ? editing.costViss : ''}" placeholder="0" oninput="updateProfitPreview()">
+        <label>ယူနစ်</label>
+        <select id="pf-costunit">
+          ${state.costUnits.map(u => `<option ${editing && editing.costUnit===u ? 'selected':''}>${u}</option>`).join('')}
+          <option value="__new__">+ ယူနစ်အသစ်</option>
+        </select>
+        <input type="text" id="pf-newunit" placeholder="ယူနစ်အသစ် အမည် (ဥပမာ - ဒါဇင်)" style="display:none; margin-top:8px;">
       </div>
       <div>
-        <label>1 ပြည် ဈေး</label>
-        <input type="number" id="pf-cost-pyi" value="${editing && editing.costPyi ? editing.costPyi : ''}" placeholder="0" oninput="updateProfitPreview()">
-      </div>
-      <div>
-        <label>1 အိတ် ဈေး</label>
-        <input type="number" id="pf-cost-bag" value="${editing && editing.costBag ? editing.costBag : ''}" placeholder="0" oninput="updateProfitPreview()">
+        <label>ဈေးနှုန်း</label>
+        <input type="number" id="pf-costvalue" value="${editing && editing.costValue ? editing.costValue : ''}" placeholder="0" oninput="updateProfitPreview()">
       </div>
     </div>
 
@@ -1629,18 +1649,18 @@ function openProductForm(id){
   document.getElementById('pf-category').addEventListener('change', function(){
     document.getElementById('pf-newcat').style.display = this.value === '__new__' ? 'block' : 'none';
   });
+  document.getElementById('pf-costunit').addEventListener('change', function(){
+    document.getElementById('pf-newunit').style.display = this.value === '__new__' ? 'block' : 'none';
+  });
   document.getElementById('sheet-overlay').classList.add('show');
   updateProfitPreview();
 }
 
-/* Cost is usually only known in ONE of these bulk units per product (however
-   the shop happens to buy that particular item), so the first one filled in
-   is used as the cost baseline for the profit shown against each sell tier. */
+/* The cost unit dropdown lets a shop define whatever units it actually
+   buys in (viss, pyi, bag, dozen, ...) rather than being locked to a
+   fixed list — new ones typed in here are remembered for next time. */
 function currentCostBaseline(){
-  const viss = Number(document.getElementById('pf-cost-viss').value) || 0;
-  const pyi = Number(document.getElementById('pf-cost-pyi').value) || 0;
-  const bag = Number(document.getElementById('pf-cost-bag').value) || 0;
-  return viss || pyi || bag || 0;
+  return Number(document.getElementById('pf-costvalue').value) || 0;
 }
 function updateProfitPreview(){
   const el = document.getElementById('pf-profit');
@@ -1673,9 +1693,9 @@ async function saveProductForm(id){
   const price = Number(document.getElementById('pf-price').value) || 0;
   const priceWholesale = Number(document.getElementById('pf-price-whole').value) || 0;
   const priceVIP = Number(document.getElementById('pf-price-vip').value) || 0;
-  const costViss = Number(document.getElementById('pf-cost-viss').value) || 0;
-  const costPyi = Number(document.getElementById('pf-cost-pyi').value) || 0;
-  const costBag = Number(document.getElementById('pf-cost-bag').value) || 0;
+  let costUnit = document.getElementById('pf-costunit').value;
+  const newUnit = document.getElementById('pf-newunit').value.trim();
+  const costValue = Number(document.getElementById('pf-costvalue').value) || 0;
   const stock = Number(document.getElementById('pf-stock').value) || 0;
 
   if(!name){ showToast('ကုန်ပစ္စည်းအမည် ထည့်ပါ'); return; }
@@ -1684,8 +1704,14 @@ async function saveProductForm(id){
     category = newCat;
     if(!state.categories.includes(category)) state.categories.push(category);
   }
+  let costUnitsChanged = false;
+  if(costUnit === '__new__'){
+    if(!newUnit){ showToast('ယူနစ်အမည် ထည့်ပါ'); return; }
+    costUnit = newUnit;
+    if(!state.costUnits.includes(costUnit)){ state.costUnits.push(costUnit); costUnitsChanged = true; }
+  }
 
-  const extra = { priceWholesale, priceVIP, costViss, costPyi, costBag };
+  const extra = { priceWholesale, priceVIP, costUnit, costValue };
   if(id){
     const p = state.products.find(x => x.id === id);
     Object.assign(p, { name, category, price, stock, icon: window.__selectedIcon }, extra);
@@ -1694,7 +1720,7 @@ async function saveProductForm(id){
   }
 
   setSyncStatus('syncing');
-  await Promise.all([saveProducts(), saveCategories()]);
+  await Promise.all([saveProducts(), saveCategories(), costUnitsChanged ? saveCostUnits() : Promise.resolve()]);
   setSyncStatus('ok');
   closeSheet();
   renderScreen();
@@ -1732,11 +1758,21 @@ function renderReports(){
   state.sales.forEach(s => s.items.forEach(it => { itemCount[it.name] = (itemCount[it.name]||0) + it.qty; }));
   const top = Object.entries(itemCount).sort((a,b)=>b[1]-a[1]).slice(0,5);
 
+  const weekSales = state.sales.filter(s => days.some(d => isSameDay(s.time, d)));
+  const weekProfit = profitFromSales(weekSales);
+  const allTimeProfit = profitFromSales(state.sales);
+
   return `
     <div class="stat-grid" style="margin-bottom:16px;">
       <div class="stat-card"><div class="label">လွန်ခဲ့သော ၇ ရက် ရောင်းအား</div><div class="value">${money(weekTotal)}</div></div>
       <div class="stat-card accent"><div class="label">အော်ဒါစုစုပေါင်း</div><div class="value">${state.sales.length}</div></div>
     </div>
+
+    <div class="stat-grid" style="margin-bottom:16px;">
+      <div class="stat-card"><div class="label">လွန်ခဲ့သော ၇ ရက် အမြတ်</div><div class="value">${money(weekProfit.total)}</div></div>
+      <div class="stat-card accent"><div class="label">စုစုပေါင်း အမြတ် (အားလုံး)</div><div class="value">${money(allTimeProfit.total)}</div></div>
+    </div>
+    ${ allTimeProfit.unknownCount>0 ? `<div class="si-sub" style="margin-bottom:16px;">* ကုန်ပစ္စည်း ${allTimeProfit.unknownCount} ခု အတွက် ဝယ်ဈေး မထည့်ရသေးလို့ အမြတ်တွင် ထည့်မတွက်ရသေးပါ — ကုန်ပစ္စည်း ပြင်ဆင်ရာမှာ ဝယ်ဈေး ဖြည့်ပေးပါ</div>` : '' }
 
     <div class="section-title">နေ့စဉ် ရောင်းအား (၇ ရက်)</div>
     <div class="card"><canvas id="salesChart" height="160"></canvas></div>
@@ -1750,7 +1786,40 @@ function renderReports(){
         </table>
       `}
     </div>
+
+    <div class="section-title">ကုန်ပစ္စည်းအလိုက် အမြတ် (အားလုံး)</div>
+    <div class="card">
+      ${ allTimeProfit.byProduct.length===0 ? emptyState('💰','ဒေတာမရှိသေးပါ','') : `
+        <table class="table-simple">
+          <tr><th>ကုန်ပစ္စည်း</th><th style="text-align:right;">အမြတ်</th></tr>
+          ${allTimeProfit.byProduct.slice(0,10).map(([name,profit]) => `<tr><td>${name}</td><td style="text-align:right;">${money(profit)}</td></tr>`).join('')}
+        </table>
+      `}
+    </div>
   `;
+}
+/* Profit uses each item's price AT THE TIME it was sold (already recorded
+   in the sale) against the product's CURRENT cost value. Items whose
+   product has since been deleted, or never had a cost entered, are
+   skipped and counted separately rather than silently treated as zero
+   cost (which would overstate profit). */
+function profitFromSales(sales){
+  let total = 0;
+  let unknownCount = 0;
+  const seenUnknown = new Set();
+  const byProductMap = {};
+  sales.forEach(s => s.items.forEach(it => {
+    const p = state.products.find(x => x.id === it.id);
+    if(!p || !p.costValue){
+      if(!seenUnknown.has(it.id)){ seenUnknown.add(it.id); unknownCount++; }
+      return;
+    }
+    const profit = (it.price - p.costValue) * it.qty;
+    total += profit;
+    byProductMap[it.name] = (byProductMap[it.name]||0) + profit;
+  }));
+  const byProduct = Object.entries(byProductMap).sort((a,b)=>b[1]-a[1]);
+  return { total, unknownCount, byProduct };
 }
 function drawChart(){
   const canvas = document.getElementById('salesChart');
