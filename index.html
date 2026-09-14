@@ -143,6 +143,9 @@
   input:focus, select:focus, textarea:focus{ outline:none; border-color:var(--primary); }
   .field-row{ display:flex; gap:10px; }
   .field-row > div{ flex:1; }
+  .field-row-3{ display:flex; gap:8px; }
+  .field-row-3 > div{ flex:1; min-width:0; }
+  .field-row-3 input{ width:100%; box-sizing:border-box; }
 
   /* ---------- Search ---------- */
   .search-bar{ display:flex; align-items:center; gap:8px; background:var(--surface); border:1.5px solid var(--border); border-radius:var(--radius-sm); padding:9px 12px; }
@@ -228,6 +231,9 @@
   .cart-line .cl-info{ flex:1; min-width:0; }
   .cart-line .cl-name{ font-size:13.5px; font-weight:700; }
   .cart-line .cl-price{ font-size:11.5px; color:var(--text-muted); }
+  .tier-chips{ display:flex; gap:4px; margin-top:4px; }
+  .tier-chip{ font-size:10px; padding:2px 8px; border-radius:20px; border:1px solid var(--border); cursor:pointer; color:var(--text-muted); background:var(--bg); }
+  .tier-chip.active{ background:var(--primary); color:#fff; border-color:var(--primary); }
   .qty-stepper{ display:flex; align-items:center; gap:8px; }
   .qty-stepper button{ width:26px; height:26px; border-radius:7px; border:1px solid var(--border); background:var(--bg); cursor:pointer; font-weight:800; color:var(--primary); }
   .qty-stepper span{ min-width:18px; text-align:center; font-weight:700; font-size:13.5px; }
@@ -566,8 +572,62 @@ async function storageGetSafe(key){
   return await rawStoreGet(key);
 }
 
+/* Google Sheets caps a single cell at ~50,000 characters. A large product
+   list (hundreds of items) can easily produce a JSON string longer than
+   that, which makes the cloud save silently fail (Apps Script returns a
+   200 error page, so the app has no way to notice). To avoid this, the
+   product list is split into fixed-size chunks that are each well under
+   the limit and stored under separate keys, plus a small "meta" key that
+   records how many chunks exist (and cleans up any now-unused chunks). */
+const PRODUCTS_CHUNK_SIZE = 150;
+
 async function saveProducts(){
-  await rawStoreSet(skey('products'), JSON.stringify(state.products));
+  const chunks = [];
+  for(let i=0;i<state.products.length;i+=PRODUCTS_CHUNK_SIZE){
+    chunks.push(state.products.slice(i, i+PRODUCTS_CHUNK_SIZE));
+  }
+  if(chunks.length === 0) chunks.push([]); // always keep at least one (empty) chunk
+
+  const metaRaw = await storageGetSafe(skey('products:meta'));
+  const meta = safeParse(metaRaw, { count: 0 });
+  const oldCount = Number(meta.count) || 0;
+
+  await Promise.all(chunks.map((c, i) => rawStoreSet(skey(`products:chunk:${i}`), JSON.stringify(c))));
+  await rawStoreSet(skey('products:meta'), JSON.stringify({ count: chunks.length }));
+
+  // remove now-unused chunk keys left over from a previously longer list
+  if(oldCount > chunks.length){
+    const removals = [];
+    for(let i=chunks.length;i<oldCount;i++) removals.push(rawStoreDelete(skey(`products:chunk:${i}`)));
+    await Promise.all(removals);
+  }
+
+  // clean up the old single-blob key from before this fix, if present
+  await rawStoreDelete(skey('products'));
+}
+
+async function loadProductsFromStorage(){
+  const metaRaw = await storageGetSafe(skey('products:meta'));
+  const meta = safeParse(metaRaw, null);
+
+  if(meta && Number(meta.count) > 0){
+    const count = Number(meta.count);
+    const chunkRaws = await Promise.all(
+      Array.from({length: count}, (_, i) => storageGetSafe(skey(`products:chunk:${i}`)))
+    );
+    let combined = [];
+    chunkRaws.forEach(raw => { combined = combined.concat(safeParse(raw, [])); });
+    return combined;
+  }
+
+  // backward compatibility: older saves (or ones from before this fix)
+  // used a single "products" key holding the whole array in one blob.
+  const legacyRaw = await storageGetSafe(skey('products'));
+  if(legacyRaw){
+    const legacy = safeParse(legacyRaw, null);
+    if(legacy){ return legacy; }
+  }
+  return null; // caller decides the fallback (existing list vs empty)
 }
 async function saveSales(){
   await rawStoreSet(skey('sales'), JSON.stringify(state.sales));
@@ -628,21 +688,21 @@ function safeParse(raw, fallback){
 async function loadShop(code, {seedIfEmpty=false} = {}){
   state.shopCode = code;
   setSyncStatus('syncing');
-  const [pRaw, sRaw, setRaw, catRaw, stRaw] = await Promise.all([
-    storageGetSafe(skey('products')),
+  const [pList, sRaw, setRaw, catRaw, stRaw] = await Promise.all([
+    loadProductsFromStorage(),
     storageGetSafe(skey('sales')),
     storageGetSafe(skey('settings')),
     storageGetSafe(skey('categories')),
     storageGetSafe(skey('staff')),
   ]);
 
-  state.products = safeParse(pRaw, []);
+  state.products = pList || [];
   state.sales = safeParse(sRaw, []);
   state.categories = safeParse(catRaw, ['အားလုံး']);
   state.settings = safeParse(setRaw, { currency:'Ks', shopName:'Hasan POS' });
   state.staff = safeParse(stRaw, []);
 
-  if(!pRaw && seedIfEmpty){
+  if(!pList && seedIfEmpty){
     seedDemoData();
     await Promise.all([saveProducts(), saveSales(), saveSettings(), saveCategories()]);
   }
@@ -673,14 +733,14 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
 async function manualSync(){
   if(!state.shopCode) return;
   setSyncStatus('syncing');
-  const [pRaw, sRaw, setRaw, catRaw, stRaw] = await Promise.all([
-    storageGetSafe(skey('products')),
+  const [pList, sRaw, setRaw, catRaw, stRaw] = await Promise.all([
+    loadProductsFromStorage(),
     storageGetSafe(skey('sales')),
     storageGetSafe(skey('settings')),
     storageGetSafe(skey('categories')),
     storageGetSafe(skey('staff')),
   ]);
-  if(pRaw) state.products = safeParse(pRaw, state.products);
+  if(pList) state.products = pList;
   if(sRaw) state.sales = safeParse(sRaw, state.sales);
   if(setRaw) state.settings = safeParse(setRaw, state.settings);
   if(catRaw) state.categories = safeParse(catRaw, state.categories);
@@ -1018,8 +1078,12 @@ function downloadFile(filename, content, mime){
 
 function exportProductsCSV(){
   if(state.products.length === 0){ showToast('ကုန်ပစ္စည်းမရှိသေးပါ'); return; }
-  const header = ['အမည်','အမျိုးအစား','ဈေးနှုန်း','လက်ကျန်'];
-  const rows = state.products.map(p => [p.name, p.category, p.price, p.stock]);
+  const header = ['အမည်','အမျိုးအစား','ဈေးနှုန်း(လက်လီ)','လက်ကျန်','ရောင်းဈေး(လက်ကား)','ရောင်းဈေး(VIP)','ဝယ်ဈေး(1ပိသာ)','ဝယ်ဈေး(1ပြည်)','ဝယ်ဈေး(1အိတ်)'];
+  const rows = state.products.map(p => [
+    p.name, p.category, p.price, p.stock,
+    p.priceWholesale || '', p.priceVIP || '',
+    p.costViss || '', p.costPyi || '', p.costBag || '',
+  ]);
   downloadFile(`hasanpos-products-${dateStamp()}.csv`, toCSV(header, rows), 'text/csv;charset=utf-8;');
   showToast('ကုန်ပစ္စည်းစာရင်း Export ပြီးပါပြီ');
 }
@@ -1103,7 +1167,13 @@ function parseImportCSV(text){
     const price = Number(String(cells[2]||'0').replace(/[,\s]/g,'')) || 0;
     const stock = Number(String(cells[3]||'0').replace(/[,\s]/g,'')) || 0;
     const icon = (cells[4]||'').trim();
-    items.push({ name, category, price, stock, icon: ICONS.includes(icon) ? icon : '' });
+    // optional extra columns (all backward-compatible — older 4/5-column CSVs still work)
+    const priceWholesale = Number(String(cells[5]||'0').replace(/[,\s]/g,'')) || 0;
+    const priceVIP = Number(String(cells[6]||'0').replace(/[,\s]/g,'')) || 0;
+    const costViss = Number(String(cells[7]||'0').replace(/[,\s]/g,'')) || 0;
+    const costPyi = Number(String(cells[8]||'0').replace(/[,\s]/g,'')) || 0;
+    const costBag = Number(String(cells[9]||'0').replace(/[,\s]/g,'')) || 0;
+    items.push({ name, category, price, stock, icon: ICONS.includes(icon) ? icon : '', priceWholesale, priceVIP, costViss, costPyi, costBag });
   }
   return items;
 }
@@ -1173,11 +1243,18 @@ async function processImport(){
       existing.price = it.price;
       existing.stock = it.stock;
       if(it.icon) existing.icon = it.icon;
+      if(it.priceWholesale) existing.priceWholesale = it.priceWholesale;
+      if(it.priceVIP) existing.priceVIP = it.priceVIP;
+      if(it.costViss) existing.costViss = it.costViss;
+      if(it.costPyi) existing.costPyi = it.costPyi;
+      if(it.costBag) existing.costBag = it.costBag;
       updated++;
     } else {
       state.products.push({
         id: uid(), name: it.name, category: it.category, price: it.price, stock: it.stock,
         icon: it.icon || ICONS[Math.floor(Math.random()*ICONS.length)],
+        priceWholesale: it.priceWholesale, priceVIP: it.priceVIP,
+        costViss: it.costViss, costPyi: it.costPyi, costBag: it.costBag,
       });
       added++;
     }
@@ -1248,9 +1325,29 @@ function addToCart(id){
     if(line.qty >= p.stock){ showToast('ကုန်ပစ္စည်း လက်ကျန်မလုံလောက်ပါ'); return; }
     line.qty++;
   } else {
-    state.cart.push({ id:p.id, name:p.name, price:p.price, qty:1, icon:p.icon });
+    state.cart.push({ id:p.id, name:p.name, price:p.price, qty:1, icon:p.icon, tier:'retail' });
   }
   renderScreen();
+}
+
+/* Picks the price for a given tier, falling back to the retail price when
+   that product doesn't have a wholesale/VIP price set. */
+function tierPrice(p, tier){
+  if(tier === 'wholesale') return p.priceWholesale || p.price;
+  if(tier === 'vip') return p.priceVIP || p.price;
+  return p.price;
+}
+function tierLabel(tier){
+  return tier === 'wholesale' ? 'လက်ကား' : tier === 'vip' ? 'VIP' : 'လက်လီ';
+}
+function setCartLineTier(id, tier){
+  const line = state.cart.find(c => c.id === id);
+  const p = state.products.find(x => x.id === id);
+  if(!line || !p) return;
+  line.tier = tier;
+  line.price = tierPrice(p, tier);
+  renderCartSheetContent();
+  renderCartBar();
 }
 
 function renderCartBar(){
@@ -1294,12 +1391,20 @@ function renderCartSheetContent(){
     <div class="sheet-handle"></div>
     <div class="sheet-header"><h3>စျေးခြင်းလှည်း</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
     <div id="cart-lines">
-      ${ state.cart.length===0 ? emptyState('🛒','လှည်းထဲ ဘာမှမရှိပါ','') : state.cart.map(c => `
+      ${ state.cart.length===0 ? emptyState('🛒','လှည်းထဲ ဘာမှမရှိပါ','') : state.cart.map(c => {
+        const p = state.products.find(x => x.id === c.id);
+        const hasTiers = p && (p.priceWholesale || p.priceVIP);
+        return `
         <div class="cart-line">
           <div class="cl-icon">${c.icon||'🛒'}</div>
           <div class="cl-info">
             <div class="cl-name">${c.name}</div>
             <div class="cl-price">${money(c.price)}</div>
+            ${ hasTiers ? `
+              <div class="tier-chips">
+                ${['retail','wholesale','vip'].map(t => `<div class="tier-chip ${ (c.tier||'retail')===t ? 'active':''}" onclick="setCartLineTier('${c.id}','${t}')">${tierLabel(t)}</div>`).join('')}
+              </div>
+            ` : '' }
           </div>
           <div class="qty-stepper">
             <button onclick="changeCartQty('${c.id}',-1)">−</button>
@@ -1307,7 +1412,7 @@ function renderCartSheetContent(){
             <button onclick="changeCartQty('${c.id}',1)">+</button>
           </div>
         </div>
-      `).join('') }
+      `; }).join('') }
     </div>
 
     ${ state.cart.length ? `
@@ -1366,7 +1471,7 @@ async function checkout(){
   const sale = {
     id: uid(),
     time: Date.now(),
-    items: state.cart.map(c => ({ id:c.id, name:c.name, price:c.price, qty:c.qty })),
+    items: state.cart.map(c => ({ id:c.id, name:c.name, price:c.price, qty:c.qty, tier:c.tier||'retail' })),
     subtotal: sub,
     discountPct: state.discountPct,
     total: total,
@@ -1449,7 +1554,7 @@ function productListItemHTML(p){
       <div class="p-icon">${p.icon||'🛒'}</div>
       <div class="p-info">
         <div class="name">${p.name} ${p.stock<=LOW_STOCK_THRESHOLD ? '<span class="low-badge">နည်းနေသည်</span>' : ''}</div>
-        <div class="meta">${p.category} · ${money(p.price)} · လက်ကျန် ${p.stock}</div>
+        <div class="meta">${p.category} · လက်လီ ${money(p.price)}${p.priceWholesale ? ` · လက်ကား ${money(p.priceWholesale)}` : ''}${p.priceVIP ? ` · VIP ${money(p.priceVIP)}` : ''} · လက်ကျန် ${p.stock}</div>
       </div>
       <div class="p-actions">
         <div class="icon-btn" onclick="openProductForm('${p.id}')">✎</div>
@@ -1481,16 +1586,42 @@ function openProductForm(id){
     </select>
     <input type="text" id="pf-newcat" placeholder="အမျိုးအစားအသစ်အမည်" style="display:none; margin-top:8px;">
 
-    <div class="field-row">
+    <label style="margin-top:14px; display:block; font-weight:700;">ဝယ်ဈေး (ကုန်ကျစရိတ် — သက်ဆိုင်ရာအလိုက် တစ်ခုပဲ ဖြည့်ရင်လည်းရသည်)</label>
+    <div class="field-row-3">
       <div>
-        <label>ဈေးနှုန်း (${state.settings.currency})</label>
-        <input type="number" id="pf-price" value="${editing ? editing.price : ''}" placeholder="0">
+        <label>1 ပိသာ ဈေး</label>
+        <input type="number" id="pf-cost-viss" value="${editing && editing.costViss ? editing.costViss : ''}" placeholder="0" oninput="updateProfitPreview()">
       </div>
       <div>
-        <label>လက်ကျန်အရေအတွက်</label>
-        <input type="number" id="pf-stock" value="${editing ? editing.stock : ''}" placeholder="0">
+        <label>1 ပြည် ဈေး</label>
+        <input type="number" id="pf-cost-pyi" value="${editing && editing.costPyi ? editing.costPyi : ''}" placeholder="0" oninput="updateProfitPreview()">
+      </div>
+      <div>
+        <label>1 အိတ် ဈေး</label>
+        <input type="number" id="pf-cost-bag" value="${editing && editing.costBag ? editing.costBag : ''}" placeholder="0" oninput="updateProfitPreview()">
       </div>
     </div>
+
+    <label style="margin-top:14px; display:block; font-weight:700;">ရောင်းဈေး (${state.settings.currency})</label>
+    <div class="field-row-3">
+      <div>
+        <label>လက်လီ</label>
+        <input type="number" id="pf-price" value="${editing ? editing.price : ''}" placeholder="0" oninput="updateProfitPreview()">
+      </div>
+      <div>
+        <label>လက်ကား</label>
+        <input type="number" id="pf-price-whole" value="${editing && editing.priceWholesale ? editing.priceWholesale : ''}" placeholder="0" oninput="updateProfitPreview()">
+      </div>
+      <div>
+        <label>VIP</label>
+        <input type="number" id="pf-price-vip" value="${editing && editing.priceVIP ? editing.priceVIP : ''}" placeholder="0" oninput="updateProfitPreview()">
+      </div>
+    </div>
+
+    <div id="pf-profit" class="si-sub" style="margin-top:10px; line-height:1.7;"></div>
+
+    <label style="margin-top:14px; display:block;">လက်ကျန်အရေအတွက်</label>
+    <input type="number" id="pf-stock" value="${editing ? editing.stock : ''}" placeholder="0">
 
     <button class="btn btn-primary btn-block" style="margin-top:18px;" onclick="saveProductForm(${editing ? `'${editing.id}'` : 'null'})">${editing?'သိမ်းမည်':'ထည့်သွင်းမည်'}</button>
   `;
@@ -1499,6 +1630,36 @@ function openProductForm(id){
     document.getElementById('pf-newcat').style.display = this.value === '__new__' ? 'block' : 'none';
   });
   document.getElementById('sheet-overlay').classList.add('show');
+  updateProfitPreview();
+}
+
+/* Cost is usually only known in ONE of these bulk units per product (however
+   the shop happens to buy that particular item), so the first one filled in
+   is used as the cost baseline for the profit shown against each sell tier. */
+function currentCostBaseline(){
+  const viss = Number(document.getElementById('pf-cost-viss').value) || 0;
+  const pyi = Number(document.getElementById('pf-cost-pyi').value) || 0;
+  const bag = Number(document.getElementById('pf-cost-bag').value) || 0;
+  return viss || pyi || bag || 0;
+}
+function updateProfitPreview(){
+  const el = document.getElementById('pf-profit');
+  if(!el) return;
+  const cost = currentCostBaseline();
+  const tiers = [
+    ['လက်လီ', Number(document.getElementById('pf-price').value) || 0],
+    ['လက်ကား', Number(document.getElementById('pf-price-whole').value) || 0],
+    ['VIP', Number(document.getElementById('pf-price-vip').value) || 0],
+  ];
+  if(!cost){
+    el.innerHTML = 'ဝယ်ဈေး ထည့်ထားရင် အမြတ် အလိုအလျောက် တွက်ပေးပါမည်';
+    return;
+  }
+  el.innerHTML = tiers.filter(t => t[1] > 0).map(([label, sell]) => {
+    const profit = sell - cost;
+    const color = profit >= 0 ? 'var(--success, #16a34a)' : 'var(--danger)';
+    return `<div>${label} အမြတ်: <b style="color:${color}">${money(profit)}</b></div>`;
+  }).join('') || 'ရောင်းဈေး ထည့်ထားရင် အမြတ် အလိုအလျောက် တွက်ပေးပါမည်';
 }
 function selectIcon(ic){
   window.__selectedIcon = ic;
@@ -1510,6 +1671,11 @@ async function saveProductForm(id){
   let category = document.getElementById('pf-category').value;
   const newCat = document.getElementById('pf-newcat').value.trim();
   const price = Number(document.getElementById('pf-price').value) || 0;
+  const priceWholesale = Number(document.getElementById('pf-price-whole').value) || 0;
+  const priceVIP = Number(document.getElementById('pf-price-vip').value) || 0;
+  const costViss = Number(document.getElementById('pf-cost-viss').value) || 0;
+  const costPyi = Number(document.getElementById('pf-cost-pyi').value) || 0;
+  const costBag = Number(document.getElementById('pf-cost-bag').value) || 0;
   const stock = Number(document.getElementById('pf-stock').value) || 0;
 
   if(!name){ showToast('ကုန်ပစ္စည်းအမည် ထည့်ပါ'); return; }
@@ -1519,11 +1685,12 @@ async function saveProductForm(id){
     if(!state.categories.includes(category)) state.categories.push(category);
   }
 
+  const extra = { priceWholesale, priceVIP, costViss, costPyi, costBag };
   if(id){
     const p = state.products.find(x => x.id === id);
-    Object.assign(p, { name, category, price, stock, icon: window.__selectedIcon });
+    Object.assign(p, { name, category, price, stock, icon: window.__selectedIcon }, extra);
   } else {
-    state.products.push({ id: uid(), name, category, price, stock, icon: window.__selectedIcon });
+    state.products.push(Object.assign({ id: uid(), name, category, price, stock, icon: window.__selectedIcon }, extra));
   }
 
   setSyncStatus('syncing');
