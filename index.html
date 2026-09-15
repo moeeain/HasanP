@@ -333,6 +333,11 @@
   .staff-row .sr-info{ flex:1; min-width:0; }
   .staff-row .sr-name{ font-weight:700; font-size:13.5px; }
   .staff-row .sr-pin{ font-size:11px; color:var(--text-muted); }
+  @media print{
+    body *{ visibility:hidden; }
+    #receipt-print-area, #receipt-print-area *{ visibility:visible; }
+    #receipt-print-area{ position:absolute; top:0; left:0; width:100%; padding:0; margin:0; box-shadow:none; }
+  }
 </style>
 </head>
 <body>
@@ -440,16 +445,22 @@ function doPost(e){
 
 let state = {
   shopCode: null,
-  shopName: 'Hasan POS',
-  settings: { currency: 'Ks', shopName: 'Hasan POS', archiveDays: 90 },
+  shopName: 'ဦးတင်အောင် ကုန်စုံဆိုင်',
+  settings: { currency: 'Ks', shopName: 'ဦးတင်အောင် ကုန်စုံဆိုင်', archiveDays: 90 },
   products: [],
   sales: [],
   categories: ['အားလုံး'],
   costUnits: ['ပိသာ','ပြည်','အိတ်'],
-  cart: [],           // {id, name, price, qty, icon}
+  debtBooks: [],      // {id, name, customers:[{id,name,phone,entries:[{id,date,amount,note,type}]}]}
+  cart: [],           // {id, name, price, qty, icon, unit}
   activeCategory: 'အားလုံး',
   activeScreen: 'dashboard',
   paymentMethod: 'cash',
+  paymentType: 'cash',      // 'cash' | 'credit'
+  checkoutCustomerName: '',
+  checkoutCustomerPhone: '',
+  checkoutDebtBookId: null,
+  checkoutDebtCustomerId: null,
   discountPct: 0,
   syncStatus: 'idle',  // idle | syncing | ok | err
   lastSyncAt: null,
@@ -573,14 +584,59 @@ async function storageGetSafe(key){
   return await rawStoreGet(key);
 }
 
-/* Google Sheets caps a single cell at ~50,000 characters. A large product
-   list (hundreds of items) can easily produce a JSON string longer than
-   that, which makes the cloud save silently fail (Apps Script returns a
-   200 error page, so the app has no way to notice). To avoid this, the
-   product list is split into fixed-size chunks that are each well under
-   the limit and stored under separate keys, plus a small "meta" key that
-   records how many chunks exist (and cleans up any now-unused chunks). */
-const PRODUCTS_CHUNK_SIZE = 150;
+/* Google Sheets caps a single cell at ~50,000 characters. A large list
+   (hundreds of products, or many debt-book entries) can easily produce a
+   JSON string longer than that, which makes the cloud save silently fail
+   (Apps Script returns a 200 error page, so the app has no way to notice).
+   To avoid this, any such list is split into fixed-size chunks that are
+   each well under the limit and stored under separate keys, plus a small
+   "meta" key that records how many chunks exist. */
+const STORAGE_CHUNK_SIZE = 150;
+
+async function saveChunkedList(baseKey, list){
+  const chunks = [];
+  for(let i=0;i<list.length;i+=STORAGE_CHUNK_SIZE){
+    chunks.push(list.slice(i, i+STORAGE_CHUNK_SIZE));
+  }
+  if(chunks.length === 0) chunks.push([]); // always keep at least one (empty) chunk
+
+  const metaRaw = await storageGetSafe(skey(`${baseKey}:meta`));
+  const meta = safeParse(metaRaw, { count: 0 });
+  const oldCount = Number(meta.count) || 0;
+
+  await Promise.all(chunks.map((c, i) => rawStoreSet(skey(`${baseKey}:chunk:${i}`), JSON.stringify(c))));
+  await rawStoreSet(skey(`${baseKey}:meta`), JSON.stringify({ count: chunks.length }));
+
+  if(oldCount > chunks.length){
+    const removals = [];
+    for(let i=chunks.length;i<oldCount;i++) removals.push(rawStoreDelete(skey(`${baseKey}:chunk:${i}`)));
+    await Promise.all(removals);
+  }
+}
+
+async function loadChunkedList(baseKey, legacyKey){
+  const metaRaw = await storageGetSafe(skey(`${baseKey}:meta`));
+  const meta = safeParse(metaRaw, null);
+
+  if(meta && Number(meta.count) > 0){
+    const count = Number(meta.count);
+    const chunkRaws = await Promise.all(
+      Array.from({length: count}, (_, i) => storageGetSafe(skey(`${baseKey}:chunk:${i}`)))
+    );
+    let combined = [];
+    chunkRaws.forEach(raw => { combined = combined.concat(safeParse(raw, [])); });
+    return combined;
+  }
+
+  if(legacyKey){
+    const legacyRaw = await storageGetSafe(skey(legacyKey));
+    if(legacyRaw){
+      const legacy = safeParse(legacyRaw, null);
+      if(legacy) return legacy;
+    }
+  }
+  return null; // caller decides the fallback (existing list vs empty)
+}
 
 /* Older versions stored cost as three separate fixed fields (per-viss,
    per-pyi, per-bag). This folds any of those into the new single
@@ -595,52 +651,18 @@ function migrateLegacyCostFields(){
 }
 
 async function saveProducts(){
-  const chunks = [];
-  for(let i=0;i<state.products.length;i+=PRODUCTS_CHUNK_SIZE){
-    chunks.push(state.products.slice(i, i+PRODUCTS_CHUNK_SIZE));
-  }
-  if(chunks.length === 0) chunks.push([]); // always keep at least one (empty) chunk
-
-  const metaRaw = await storageGetSafe(skey('products:meta'));
-  const meta = safeParse(metaRaw, { count: 0 });
-  const oldCount = Number(meta.count) || 0;
-
-  await Promise.all(chunks.map((c, i) => rawStoreSet(skey(`products:chunk:${i}`), JSON.stringify(c))));
-  await rawStoreSet(skey('products:meta'), JSON.stringify({ count: chunks.length }));
-
-  // remove now-unused chunk keys left over from a previously longer list
-  if(oldCount > chunks.length){
-    const removals = [];
-    for(let i=chunks.length;i<oldCount;i++) removals.push(rawStoreDelete(skey(`products:chunk:${i}`)));
-    await Promise.all(removals);
-  }
-
-  // clean up the old single-blob key from before this fix, if present
-  await rawStoreDelete(skey('products'));
+  await saveChunkedList('products', state.products);
+  await rawStoreDelete(skey('products')); // clean up the old single-blob key from before this fix
+}
+async function loadProductsFromStorage(){
+  return await loadChunkedList('products', 'products');
 }
 
-async function loadProductsFromStorage(){
-  const metaRaw = await storageGetSafe(skey('products:meta'));
-  const meta = safeParse(metaRaw, null);
-
-  if(meta && Number(meta.count) > 0){
-    const count = Number(meta.count);
-    const chunkRaws = await Promise.all(
-      Array.from({length: count}, (_, i) => storageGetSafe(skey(`products:chunk:${i}`)))
-    );
-    let combined = [];
-    chunkRaws.forEach(raw => { combined = combined.concat(safeParse(raw, [])); });
-    return combined;
-  }
-
-  // backward compatibility: older saves (or ones from before this fix)
-  // used a single "products" key holding the whole array in one blob.
-  const legacyRaw = await storageGetSafe(skey('products'));
-  if(legacyRaw){
-    const legacy = safeParse(legacyRaw, null);
-    if(legacy){ return legacy; }
-  }
-  return null; // caller decides the fallback (existing list vs empty)
+async function saveDebtBooks(){
+  await saveChunkedList('debtBooks', state.debtBooks);
+}
+async function loadDebtBooksFromStorage(){
+  return await loadChunkedList('debtBooks', null);
 }
 async function saveSales(){
   await rawStoreSet(skey('sales'), JSON.stringify(state.sales));
@@ -679,12 +701,12 @@ async function runArchiveCheck(){
 function seedDemoData(){
   state.categories = ['အားလုံး','အချိုရည်','နံနက်စာ','ကွမ်းယာ/ဆေးလိပ်','အထွေထွေ'];
   state.products = [
-    { id: uid(), name:'ကော်ဖီမစ်', category:'အချိုရည်', price:800, stock:40, icon:'☕' },
-    { id: uid(), name:'ရေခဲသောက်ရေ', category:'အချိုရည်', price:300, stock:60, icon:'🧊' },
-    { id: uid(), name:'ဗီစကွတ်', category:'နံနက်စာ', price:1200, stock:22, icon:'🍪' },
-    { id: uid(), name:'ပေါင်မုန့်', category:'နံနက်စာ', price:1500, stock:15, icon:'🍞' },
-    { id: uid(), name:'ကွမ်းယာအစုံ', category:'ကွမ်းယာ/ဆေးလိပ်', price:500, stock:4, icon:'📦' },
-    { id: uid(), name:'စက္ကူတစ်ရှူး', category:'အထွေထွေ', price:1000, stock:30, icon:'🧺' },
+    { id: uid(), name:'ကော်ဖီမစ်', category:'အချိုရည်', price:800, stock:40, icon:'☕', unit:'ခု' },
+    { id: uid(), name:'ရေခဲသောက်ရေ', category:'အချိုရည်', price:300, stock:60, icon:'🧊', unit:'ပုလင်း' },
+    { id: uid(), name:'ဗီစကွတ်', category:'နံနက်စာ', price:1200, stock:22, icon:'🍪', unit:'ထုပ်' },
+    { id: uid(), name:'ပေါင်မုန့်', category:'နံနက်စာ', price:1500, stock:15, icon:'🍞', unit:'ခု' },
+    { id: uid(), name:'ကွမ်းယာအစုံ', category:'ကွမ်းယာ/ဆေးလိပ်', price:500, stock:4, icon:'📦', unit:'ထုပ်' },
+    { id: uid(), name:'စက္ကူတစ်ရှူး', category:'အထွေထွေ', price:1000, stock:30, icon:'🧺', unit:'ထုပ်' },
   ];
   state.sales = [];
 }
@@ -704,13 +726,14 @@ function safeParse(raw, fallback){
 async function loadShop(code, {seedIfEmpty=false} = {}){
   state.shopCode = code;
   setSyncStatus('syncing');
-  const [pList, sRaw, setRaw, catRaw, cuRaw, stRaw] = await Promise.all([
+  const [pList, sRaw, setRaw, catRaw, cuRaw, stRaw, dbList] = await Promise.all([
     loadProductsFromStorage(),
     storageGetSafe(skey('sales')),
     storageGetSafe(skey('settings')),
     storageGetSafe(skey('categories')),
     storageGetSafe(skey('costUnits')),
     storageGetSafe(skey('staff')),
+    loadDebtBooksFromStorage(),
   ]);
 
   state.products = pList || [];
@@ -718,8 +741,9 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
   state.sales = safeParse(sRaw, []);
   state.categories = safeParse(catRaw, ['အားလုံး']);
   state.costUnits = safeParse(cuRaw, ['ပိသာ','ပြည်','အိတ်']);
-  state.settings = safeParse(setRaw, { currency:'Ks', shopName:'Hasan POS' });
+  state.settings = safeParse(setRaw, { currency:'Ks', shopName:'ဦးတင်အောင် ကုန်စုံဆိုင်' });
   state.staff = safeParse(stRaw, []);
+  state.debtBooks = dbList || [];
 
   if(!pList && seedIfEmpty){
     seedDemoData();
@@ -752,13 +776,14 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
 async function manualSync(){
   if(!state.shopCode) return;
   setSyncStatus('syncing');
-  const [pList, sRaw, setRaw, catRaw, cuRaw, stRaw] = await Promise.all([
+  const [pList, sRaw, setRaw, catRaw, cuRaw, stRaw, dbList] = await Promise.all([
     loadProductsFromStorage(),
     storageGetSafe(skey('sales')),
     storageGetSafe(skey('settings')),
     storageGetSafe(skey('categories')),
     storageGetSafe(skey('costUnits')),
     storageGetSafe(skey('staff')),
+    loadDebtBooksFromStorage(),
   ]);
   if(pList){ state.products = pList; migrateLegacyCostFields(); }
   if(sRaw) state.sales = safeParse(sRaw, state.sales);
@@ -766,6 +791,7 @@ async function manualSync(){
   if(catRaw) state.categories = safeParse(catRaw, state.categories);
   if(cuRaw) state.costUnits = safeParse(cuRaw, state.costUnits);
   if(stRaw) state.staff = safeParse(stRaw, state.staff);
+  if(dbList) state.debtBooks = dbList;
   await runArchiveCheck();
   setSyncStatus('ok');
   renderTopbar();
@@ -1067,7 +1093,7 @@ function saleRowHTML(s){
   `;
 }
 function paymentLabel(m){
-  return { cash:'ငွေသား', kpay:'KBZPay', wave:'WavePay', card:'ကတ်' }[m] || m;
+  return { cash:'ငွေသား', kpay:'KBZPay', wave:'WavePay', card:'ကတ်', credit:'အကြွေး' }[m] || m;
 }
 
 /* ---------------- export / backup ---------------- */
@@ -1099,11 +1125,11 @@ function downloadFile(filename, content, mime){
 
 function exportProductsCSV(){
   if(state.products.length === 0){ showToast('ကုန်ပစ္စည်းမရှိသေးပါ'); return; }
-  const header = ['အမည်','အမျိုးအစား','ဈေးနှုန်း(လက်လီ)','လက်ကျန်','ရောင်းဈေး(လက်ကား)','ရောင်းဈေး(VIP)','ဝယ်ဈေးယူနစ်','ဝယ်ဈေး'];
+  const header = ['အမည်','အမျိုးအစား','ဈေးနှုန်း(လက်လီ)','လက်ကျန်','ရောင်းဈေး(လက်ကား)','ရောင်းဈေး(VIP)','ဝယ်ဈေးယူနစ်','ဝယ်ဈေး','ယူနစ်'];
   const rows = state.products.map(p => [
     p.name, p.category, p.price, p.stock,
     p.priceWholesale || '', p.priceVIP || '',
-    p.costUnit || '', p.costValue || '',
+    p.costUnit || '', p.costValue || '', p.unit || '',
   ]);
   downloadFile(`hasanpos-products-${dateStamp()}.csv`, toCSV(header, rows), 'text/csv;charset=utf-8;');
   showToast('ကုန်ပစ္စည်းစာရင်း Export ပြီးပါပြီ');
@@ -1193,7 +1219,8 @@ function parseImportCSV(text){
     const priceVIP = Number(String(cells[6]||'0').replace(/[,\s]/g,'')) || 0;
     const costUnit = (cells[7]||'').trim();
     const costValue = Number(String(cells[8]||'0').replace(/[,\s]/g,'')) || 0;
-    items.push({ name, category, price, stock, icon: ICONS.includes(icon) ? icon : '', priceWholesale, priceVIP, costUnit, costValue });
+    const unit = (cells[9]||'').trim();
+    items.push({ name, category, price, stock, icon: ICONS.includes(icon) ? icon : '', priceWholesale, priceVIP, costUnit, costValue, unit });
   }
   return items;
 }
@@ -1268,13 +1295,14 @@ async function processImport(){
       if(it.priceVIP) existing.priceVIP = it.priceVIP;
       if(it.costUnit) existing.costUnit = it.costUnit;
       if(it.costValue) existing.costValue = it.costValue;
+      if(it.unit) existing.unit = it.unit;
       updated++;
     } else {
       state.products.push({
         id: uid(), name: it.name, category: it.category, price: it.price, stock: it.stock,
         icon: it.icon || ICONS[Math.floor(Math.random()*ICONS.length)],
         priceWholesale: it.priceWholesale, priceVIP: it.priceVIP,
-        costUnit: it.costUnit, costValue: it.costValue,
+        costUnit: it.costUnit, costValue: it.costValue, unit: it.unit || 'ခု',
       });
       added++;
     }
@@ -1316,7 +1344,7 @@ function productCardHTML(p){
       <div class="p-icon">${p.icon || '🛒'}</div>
       <div class="p-name">${p.name}</div>
       <div class="p-price">${money(p.price)}</div>
-      <div class="p-stock ${p.stock<=LOW_STOCK_THRESHOLD?'low':''}">${out?'ကုန်သွားပြီ':'လက်ကျန် '+p.stock}</div>
+      <div class="p-stock ${p.stock<=LOW_STOCK_THRESHOLD?'low':''}">${out?'ကုန်သွားပြီ':'လက်ကျန် '+p.stock+' '+(p.unit||'')}</div>
     </div>
   `;
 }
@@ -1345,7 +1373,7 @@ function addToCart(id){
     if(line.qty >= p.stock){ showToast('ကုန်ပစ္စည်း လက်ကျန်မလုံလောက်ပါ'); return; }
     line.qty++;
   } else {
-    state.cart.push({ id:p.id, name:p.name, price:p.price, qty:1, icon:p.icon, tier:'retail' });
+    state.cart.push({ id:p.id, name:p.name, price:p.price, qty:1, icon:p.icon, tier:'retail', unit:p.unit||'ခု' });
   }
   renderScreen();
 }
@@ -1407,6 +1435,7 @@ function renderCartSheetContent(){
   const sub = cartSubtotal();
   const disc = sub * (state.discountPct/100);
   const total = cartTotal();
+  const selectedBook = state.debtBooks.find(b => b.id === state.checkoutDebtBookId);
   document.getElementById('sheet-content').innerHTML = `
     <div class="sheet-handle"></div>
     <div class="sheet-header"><h3>စျေးခြင်းလှည်း</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
@@ -1419,7 +1448,7 @@ function renderCartSheetContent(){
           <div class="cl-icon">${c.icon||'🛒'}</div>
           <div class="cl-info">
             <div class="cl-name">${c.name}</div>
-            <div class="cl-price">${money(c.price)}</div>
+            <div class="cl-price">${money(c.price)}${c.unit ? ' / '+c.unit : ''}</div>
             ${ hasTiers ? `
               <div class="tier-chips">
                 ${['retail','wholesale','vip'].map(t => `<div class="tier-chip ${ (c.tier||'retail')===t ? 'active':''}" onclick="setCartLineTier('${c.id}','${t}')">${tierLabel(t)}</div>`).join('')}
@@ -1439,13 +1468,49 @@ function renderCartSheetContent(){
       <label>လျှော့စျေး (%)</label>
       <input type="number" min="0" max="100" value="${state.discountPct}" oninput="setDiscount(this.value)">
 
-      <label>ငွေပေးချေမှုနည်းလမ်း</label>
+      <label style="margin-top:14px; display:block; font-weight:700;">ဝယ်ယူပုံစံ</label>
       <div class="pay-methods">
-        ${payBtn('cash','💵','ငွေသား')}
-        ${payBtn('kpay','📱','KBZPay')}
-        ${payBtn('wave','🌊','WavePay')}
-        ${payBtn('card','💳','ကတ်')}
+        <div class="pay-btn ${state.paymentType==='cash'?'active':''}" onclick="setPaymentType('cash')"><span class="pe">💵</span>လက်ငင်း</div>
+        <div class="pay-btn ${state.paymentType==='credit'?'active':''}" onclick="setPaymentType('credit')"><span class="pe">📒</span>အကြွေး</div>
       </div>
+
+      ${ state.paymentType === 'cash' ? `
+        <label>ဖောက်သည်အမည် (ရွေးချယ်ခွင့်)</label>
+        <input type="text" id="co-custname" value="${escapeAttr(state.checkoutCustomerName)}" oninput="state.checkoutCustomerName=this.value" placeholder="ဖောက်သည်အမည်">
+        <label>ဖုန်းနံပါတ် (ရွေးချယ်ခွင့်)</label>
+        <input type="text" id="co-custphone" value="${escapeAttr(state.checkoutCustomerPhone)}" oninput="state.checkoutCustomerPhone=this.value" placeholder="09xxxxxxxxx">
+
+        <label>ငွေပေးချေမှုနည်းလမ်း</label>
+        <div class="pay-methods">
+          ${payBtn('cash','💵','ငွေသား')}
+          ${payBtn('kpay','📱','KBZPay')}
+          ${payBtn('wave','🌊','WavePay')}
+          ${payBtn('card','💳','ကတ်')}
+        </div>
+      ` : `
+        <label>အကြွေးစာရင်းစာအုပ်</label>
+        <select id="co-debtbook" onchange="onDebtBookSelect(this.value)">
+          <option value="">-- ရွေးပါ --</option>
+          ${state.debtBooks.map(b => `<option value="${b.id}" ${state.checkoutDebtBookId===b.id?'selected':''}>${escapeAttr(b.name)}</option>`).join('')}
+          <option value="__new__" ${state.checkoutDebtBookId==='__new__'?'selected':''}>+ စာအုပ်အသစ်ဖွင့်ရန်</option>
+        </select>
+        ${ state.checkoutDebtBookId === '__new__' ? `
+          <input type="text" id="co-newbook" placeholder="စာအုပ်အမည် (ဥပမာ - ရွာသူကြီးလမ်း)" style="margin-top:8px;">
+        ` : '' }
+
+        ${ selectedBook ? `
+          <label style="margin-top:12px; display:block;">ဖောက်သည် (${escapeAttr(selectedBook.name)})</label>
+          <select id="co-debtcustomer" onchange="onDebtCustomerSelect(this.value)">
+            <option value="">-- ရွေးပါ --</option>
+            ${selectedBook.customers.map(c => `<option value="${c.id}" ${state.checkoutDebtCustomerId===c.id?'selected':''}>${escapeAttr(c.name)}</option>`).join('')}
+            <option value="__new__" ${state.checkoutDebtCustomerId==='__new__'?'selected':''}>+ ဖောက်သည်အသစ်</option>
+          </select>
+          ${ state.checkoutDebtCustomerId === '__new__' ? `
+            <input type="text" id="co-newcustomer" placeholder="ဖောက်သည်အမည်" style="margin-top:8px;">
+            <input type="text" id="co-newcustomerphone" placeholder="ဖုန်းနံပါတ် (ရွေးချယ်ခွင့်)" style="margin-top:8px;">
+          ` : '' }
+        ` : '' }
+      ` }
 
       <div style="margin-top:16px;">
         <div class="summary-row"><span class="muted">စုစုပေါင်း</span><span>${money(sub)}</span></div>
@@ -1457,6 +1522,20 @@ function renderCartSheetContent(){
       <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="clearCart()">လှည်းရှင်းမည်</button>
     ` : '' }
   `;
+}
+
+function setPaymentType(t){
+  state.paymentType = t;
+  renderCartSheetContent();
+}
+function onDebtBookSelect(v){
+  state.checkoutDebtBookId = v;
+  state.checkoutDebtCustomerId = null;
+  renderCartSheetContent();
+}
+function onDebtCustomerSelect(v){
+  state.checkoutDebtCustomerId = v;
+  renderCartSheetContent();
 }
 
 function payBtn(val, emoji, label){
@@ -1485,30 +1564,85 @@ function clearCart(){
 
 async function checkout(){
   if(state.cart.length === 0) return;
+
+  let customerName = '', customerPhone = '', debtBookId = null, debtCustomerId = null;
+
+  if(state.paymentType === 'credit'){
+    let bookId = state.checkoutDebtBookId;
+    if(!bookId){ showToast('အကြွေးစာရင်းစာအုပ် ရွေးပါ'); return; }
+    if(bookId === '__new__'){
+      const newBookName = (document.getElementById('co-newbook')||{}).value?.trim();
+      if(!newBookName){ showToast('အကြွေးစာရင်းစာအုပ် အမည် ထည့်ပါ'); return; }
+      const book = { id: uid(), name: newBookName, customers: [] };
+      state.debtBooks.push(book);
+      bookId = book.id;
+    }
+    const book = state.debtBooks.find(b => b.id === bookId);
+    if(!book){ showToast('အကြွေးစာရင်းစာအုပ် ရှာမတွေ့ပါ'); return; }
+
+    let custId = state.checkoutDebtCustomerId;
+    if(!custId){ showToast('ဖောက်သည် ရွေးပါ'); return; }
+    if(custId === '__new__'){
+      const newCustName = (document.getElementById('co-newcustomer')||{}).value?.trim();
+      if(!newCustName){ showToast('ဖောက်သည်အမည် ထည့်ပါ'); return; }
+      const newCustPhone = (document.getElementById('co-newcustomerphone')||{}).value?.trim() || '';
+      const cust = { id: uid(), name: newCustName, phone: newCustPhone, entries: [] };
+      book.customers.push(cust);
+      custId = cust.id;
+      customerName = newCustName; customerPhone = newCustPhone;
+    } else {
+      const cust = book.customers.find(c => c.id === custId);
+      if(!cust){ showToast('ဖောက်သည် ရှာမတွေ့ပါ'); return; }
+      customerName = cust.name; customerPhone = cust.phone || '';
+    }
+    debtBookId = bookId;
+    debtCustomerId = custId;
+  } else {
+    customerName = state.checkoutCustomerName.trim();
+    customerPhone = state.checkoutCustomerPhone.trim();
+  }
+
   const sub = cartSubtotal();
   const total = cartTotal();
   const cashier = state.staff.find(s => s.id === state.currentStaffId);
   const sale = {
     id: uid(),
     time: Date.now(),
-    items: state.cart.map(c => ({ id:c.id, name:c.name, price:c.price, qty:c.qty, tier:c.tier||'retail' })),
+    items: state.cart.map(c => ({ id:c.id, name:c.name, price:c.price, qty:c.qty, tier:c.tier||'retail', unit:c.unit||'' })),
     subtotal: sub,
     discountPct: state.discountPct,
     total: total,
-    paymentMethod: state.paymentMethod,
+    paymentType: state.paymentType,
+    paymentMethod: state.paymentType === 'credit' ? 'credit' : state.paymentMethod,
     cashierName: cashier ? cashier.name : null,
+    customer: (customerName || customerPhone) ? { name: customerName, phone: customerPhone } : null,
+    debtBookId, debtCustomerId,
   };
   state.cart.forEach(c => {
     const p = state.products.find(x => x.id === c.id);
     if(p) p.stock = Math.max(0, p.stock - c.qty);
   });
   state.sales.push(sale);
+
+  if(state.paymentType === 'credit' && debtBookId && debtCustomerId){
+    const book = state.debtBooks.find(b => b.id === debtBookId);
+    const cust = book && book.customers.find(c => c.id === debtCustomerId);
+    if(cust){
+      cust.entries.push({ id: uid(), date: Date.now(), amount: total, note: `အော်ဒါ #${sale.id.slice(-5).toUpperCase()}`, type:'debt', saleId: sale.id });
+    }
+  }
+
   setSyncStatus('syncing');
-  await Promise.all([saveSales(), saveProducts()]);
+  await Promise.all([saveSales(), saveProducts(), state.paymentType==='credit' ? saveDebtBooks() : Promise.resolve()]);
   setSyncStatus('ok');
 
   state.cart = [];
   state.discountPct = 0;
+  state.checkoutCustomerName = '';
+  state.checkoutCustomerPhone = '';
+  state.checkoutDebtBookId = null;
+  state.checkoutDebtCustomerId = null;
+  state.paymentType = 'cash';
   closeSheet();
   renderScreen();
   openReceipt(sale.id, true);
@@ -1522,25 +1656,34 @@ function openReceipt(saleId, justCompleted){
   document.getElementById('sheet-content').innerHTML = `
     <div class="sheet-handle"></div>
     <div class="sheet-header"><h3>${justCompleted ? 'အရောင်း အောင်မြင်ပါသည် ✓' : 'ဘောက်ချာ'}</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
-    <div class="receipt">
+    <div class="receipt" id="receipt-print-area">
       <div class="r-head">
-        <div class="sn">${state.settings.shopName || 'Hasan POS'}</div>
+        <div class="sn">${state.settings.shopName || 'ဦးတင်အောင် ကုန်စုံဆိုင်'}</div>
         <div class="sd">${d.toLocaleDateString('my-MM')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')} · #${s.id.slice(-5).toUpperCase()}</div>
       </div>
+      ${ s.customer && (s.customer.name || s.customer.phone) ? `
+        <div class="r-divider"></div>
+        ${ s.customer.name ? `<div class="r-line"><span class="muted">ဖောက်သည်</span><span>${escapeAttr(s.customer.name)}</span></div>` : '' }
+        ${ s.customer.phone ? `<div class="r-line"><span class="muted">ဖုန်း</span><span>${escapeAttr(s.customer.phone)}</span></div>` : '' }
+      ` : '' }
       <div class="r-divider"></div>
       ${ s.items.map(it => `
-        <div class="r-line"><span>${it.name} × ${it.qty}</span><span>${money(it.price*it.qty)}</span></div>
+        <div class="r-line"><span>${it.name} × ${it.qty}${it.unit ? ' '+it.unit : ''}</span><span>${money(it.price*it.qty)}</span></div>
       `).join('') }
       <div class="r-divider"></div>
       <div class="r-line"><span>စုစုပေါင်း</span><span>${money(s.subtotal)}</span></div>
       ${ s.discountPct>0 ? `<div class="r-line"><span>လျှော့စျေး (${s.discountPct}%)</span><span>-${money(s.subtotal - s.total)}</span></div>` : '' }
       <div class="r-line r-total"><span>ကျသင့်ငွေ</span><span>${money(s.total)}</span></div>
-      <div class="r-line"><span class="muted">ငွေပေးချေမှု</span><span>${paymentLabel(s.paymentMethod)}</span></div>
+      <div class="r-line"><span class="muted">ငွေပေးချေမှု</span><span>${paymentLabel(s.paymentMethod)}${s.paymentType==='credit' ? ' 📒' : ''}</span></div>
       ${ s.cashierName ? `<div class="r-line"><span class="muted">ရောင်းချသူ</span><span>${s.cashierName}</span></div>` : '' }
     </div>
-    <button class="btn btn-primary btn-block" style="margin-top:18px;" onclick="closeSheet()">ပြီးပါပြီ</button>
+    <button class="btn btn-outline btn-block" style="margin-top:14px;" onclick="printReceipt()">🖨️ ဘောက်ချာ Print ထုတ်မည်</button>
+    <button class="btn btn-primary btn-block" style="margin-top:8px;" onclick="closeSheet()">ပြီးပါပြီ</button>
   `;
   document.getElementById('sheet-overlay').classList.add('show');
+}
+function printReceipt(){
+  window.print();
 }
 
 /* ============ PRODUCTS ============ */
@@ -1574,7 +1717,7 @@ function productListItemHTML(p){
       <div class="p-icon">${p.icon||'🛒'}</div>
       <div class="p-info">
         <div class="name">${p.name} ${p.stock<=LOW_STOCK_THRESHOLD ? '<span class="low-badge">နည်းနေသည်</span>' : ''}</div>
-        <div class="meta">${p.category} · လက်လီ ${money(p.price)}${p.priceWholesale ? ` · လက်ကား ${money(p.priceWholesale)}` : ''}${p.priceVIP ? ` · VIP ${money(p.priceVIP)}` : ''} · လက်ကျန် ${p.stock}</div>
+        <div class="meta">${p.category} · လက်လီ ${money(p.price)}${p.priceWholesale ? ` · လက်ကား ${money(p.priceWholesale)}` : ''}${p.priceVIP ? ` · VIP ${money(p.priceVIP)}` : ''} · လက်ကျန် ${p.stock} ${p.unit||''}</div>
       </div>
       <div class="p-actions">
         <div class="icon-btn" onclick="openProductForm('${p.id}')">✎</div>
@@ -1641,7 +1784,14 @@ function openProductForm(id){
     <div id="pf-profit" class="si-sub" style="margin-top:10px; line-height:1.7;"></div>
 
     <label style="margin-top:14px; display:block;">လက်ကျန်အရေအတွက်</label>
-    <input type="number" id="pf-stock" value="${editing ? editing.stock : ''}" placeholder="0">
+    <div class="field-row">
+      <div>
+        <input type="number" id="pf-stock" value="${editing ? editing.stock : ''}" placeholder="0">
+      </div>
+      <div>
+        <input type="text" id="pf-unit" value="${editing && editing.unit ? escapeAttr(editing.unit) : 'ခု'}" placeholder="ယူနစ် (ဥပမာ - ခု၊ ပုလင်း၊ ထုပ်)">
+      </div>
+    </div>
 
     <button class="btn btn-primary btn-block" style="margin-top:18px;" onclick="saveProductForm(${editing ? `'${editing.id}'` : 'null'})">${editing?'သိမ်းမည်':'ထည့်သွင်းမည်'}</button>
   `;
@@ -1697,6 +1847,7 @@ async function saveProductForm(id){
   const newUnit = document.getElementById('pf-newunit').value.trim();
   const costValue = Number(document.getElementById('pf-costvalue').value) || 0;
   const stock = Number(document.getElementById('pf-stock').value) || 0;
+  const unit = document.getElementById('pf-unit').value.trim() || 'ခု';
 
   if(!name){ showToast('ကုန်ပစ္စည်းအမည် ထည့်ပါ'); return; }
   if(category === '__new__'){
@@ -1711,7 +1862,7 @@ async function saveProductForm(id){
     if(!state.costUnits.includes(costUnit)){ state.costUnits.push(costUnit); costUnitsChanged = true; }
   }
 
-  const extra = { priceWholesale, priceVIP, costUnit, costValue };
+  const extra = { priceWholesale, priceVIP, costUnit, costValue, unit };
   if(id){
     const p = state.products.find(x => x.id === id);
     Object.assign(p, { name, category, price, stock, icon: window.__selectedIcon }, extra);
@@ -1911,6 +2062,29 @@ function renderSettings(){
       ${ state.staff.length>0 ? `<button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="lockNow()">ယခုပင် Lock လုပ်မည်</button>` : '' }
     </div>
 
+    <div class="section-title">အကြွေးစာရင်းစာအုပ်များ</div>
+    <div class="card">
+      <div class="si-sub" style="margin-bottom:10px;">အကြွေးဝယ်သည့် ဖောက်သည်များကို စာအုပ်အလိုက် ခွဲခြားမှတ်တမ်းတင်နိုင်ပါသည် — POS ရောင်းချချိန် "အကြွေး" ရွေးလိုက်ရင် ဒီစာအုပ်များထဲက ဖောက်သည်စာရင်းကို ရွေးချယ်နိုင်ပါမည်။</div>
+      <div id="debtbook-list">
+        ${ state.debtBooks.length===0 ? `<div class="si-sub">အကြွေးစာရင်းစာအုပ် မရှိသေးပါ</div>` :
+          state.debtBooks.map(b => {
+            const total = b.customers.reduce((sum,c) => sum + debtBalance(c), 0);
+            return `
+            <div class="staff-row" style="cursor:pointer;" onclick="openDebtBookDetail('${b.id}')">
+              <div class="sr-avatar">📒</div>
+              <div class="sr-info">
+                <div class="sr-name">${escapeAttr(b.name)}</div>
+                <div class="sr-pin">ဖောက်သည် ${b.customers.length} ဦး · ကျန်ငွေ ${money(total)}</div>
+              </div>
+              <div class="p-actions">
+                <div class="icon-btn danger" onclick="event.stopPropagation(); deleteDebtBook('${b.id}')">🗑</div>
+              </div>
+            </div>
+          `; }).join('') }
+      </div>
+      <button class="btn btn-ghost btn-block" style="margin-top:12px;" onclick="createDebtBookPrompt()">+ အကြွေးစာရင်းစာအုပ် အသစ်ဖွင့်မည်</button>
+    </div>
+
     <div class="section-title">ဒေတာ Export & Backup</div>
     <div class="card">
       <div class="si-sub" style="margin-bottom:10px;">စာရင်းကိုင်၊ backup၊ accountant ကိုပို့ရန်စတာတွေအတွက် ဒေတာများကို file အဖြစ် ဒေါင်းလုပ်ဆွဲယူနိုင်ပါတယ်။</div>
@@ -2038,6 +2212,135 @@ async function deleteStaff(id){
   renderTopbar();
   renderScreen();
   showToast('ဝန်ထမ်း ဖျက်ပြီးပါပြီ');
+}
+
+/* ============ DEBT BOOKS (အကြွေးစာရင်းစာအုပ်) ============ */
+function debtBalance(customer){
+  return customer.entries.reduce((sum, e) => sum + (e.type === 'payment' ? -e.amount : e.amount), 0);
+}
+
+async function createDebtBookPrompt(){
+  const name = (prompt('အကြွေးစာရင်းစာအုပ် အမည် ထည့်ပါ (ဥပမာ - ရွာသူကြီးလမ်း)') || '').trim();
+  if(!name) return;
+  state.debtBooks.push({ id: uid(), name, customers: [] });
+  setSyncStatus('syncing');
+  await saveDebtBooks();
+  setSyncStatus('ok');
+  renderScreen();
+  showToast('အကြွေးစာရင်းစာအုပ် အသစ် ဖွင့်ပြီးပါပြီ');
+}
+
+async function deleteDebtBook(id){
+  if(!confirm('ဒီစာအုပ်နှင့် ပါဝင်သော ဖောက်သည် အကြွေးမှတ်တမ်းအားလုံး ဖျက်မှာသေချာပါသလား?')) return;
+  state.debtBooks = state.debtBooks.filter(b => b.id !== id);
+  setSyncStatus('syncing');
+  await saveDebtBooks();
+  setSyncStatus('ok');
+  renderScreen();
+  showToast('စာအုပ် ဖျက်ပြီးပါပြီ');
+}
+
+function openDebtBookDetail(bookId){
+  const book = state.debtBooks.find(b => b.id === bookId);
+  if(!book) return;
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>${escapeAttr(book.name)}</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div id="debtbook-customers">
+      ${ book.customers.length===0 ? emptyState('👤','ဖောက်သည်မရှိသေးပါ','') :
+        book.customers.map(c => {
+          const bal = debtBalance(c);
+          return `
+          <div class="staff-row" style="cursor:pointer;" onclick="openDebtCustomerDetail('${book.id}','${c.id}')">
+            <div class="sr-avatar">${c.name.slice(0,1)}</div>
+            <div class="sr-info">
+              <div class="sr-name">${escapeAttr(c.name)}${c.phone ? ' · '+escapeAttr(c.phone) : ''}</div>
+              <div class="sr-pin">ကျန်ငွေ: ${money(bal)}</div>
+            </div>
+          </div>
+        `; }).join('') }
+    </div>
+    <button class="btn btn-ghost btn-block" style="margin-top:12px;" onclick="addDebtCustomerPrompt('${book.id}')">+ ဖောက်သည်အသစ်ထည့်မည်</button>
+    <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="openSettingsFromDebtBook()">← နောက်သို့</button>
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+}
+function openSettingsFromDebtBook(){
+  closeSheet();
+}
+
+async function addDebtCustomerPrompt(bookId){
+  const book = state.debtBooks.find(b => b.id === bookId);
+  if(!book) return;
+  const name = (prompt('ဖောက်သည်အမည် ထည့်ပါ') || '').trim();
+  if(!name) return;
+  const phone = (prompt('ဖုန်းနံပါတ် (ရွေးချယ်ခွင့်၊ ချန်ထားနိုင်သည်)') || '').trim();
+  book.customers.push({ id: uid(), name, phone, entries: [] });
+  setSyncStatus('syncing');
+  await saveDebtBooks();
+  setSyncStatus('ok');
+  openDebtBookDetail(bookId);
+  showToast('ဖောက်သည်အသစ် ထည့်ပြီးပါပြီ');
+}
+
+function openDebtCustomerDetail(bookId, custId){
+  const book = state.debtBooks.find(b => b.id === bookId);
+  const cust = book && book.customers.find(c => c.id === custId);
+  if(!book || !cust) return;
+  const bal = debtBalance(cust);
+  const entriesSorted = [...cust.entries].sort((a,b) => b.date - a.date);
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>${escapeAttr(cust.name)}</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div class="stat-grid" style="margin-bottom:14px;">
+      <div class="stat-card accent"><div class="label">ကျန်ငွေ</div><div class="value">${money(bal)}</div></div>
+    </div>
+    <div class="card">
+      ${ entriesSorted.length===0 ? emptyState('📒','မှတ်တမ်းမရှိသေးပါ','') : `
+        <table class="table-simple">
+          <tr><th>ရက်စွဲ</th><th>အမျိုးအစား</th><th style="text-align:right;">ပမာဏ</th></tr>
+          ${entriesSorted.map(e => `
+            <tr>
+              <td>${new Date(e.date).toLocaleDateString('my-MM')}</td>
+              <td>${e.type==='payment' ? 'ပေးချေငွေ' : 'အကြွေး'}${e.note ? ' · '+escapeAttr(e.note) : ''}</td>
+              <td style="text-align:right;">${e.type==='payment' ? '-' : ''}${money(e.amount)}</td>
+            </tr>
+          `).join('')}
+        </table>
+      `}
+    </div>
+    <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="addDebtPaymentPrompt('${bookId}','${custId}')">💵 ပေးချေမှု ထည့်ရန်</button>
+    <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="deleteDebtCustomerPrompt('${bookId}','${custId}')">ဖောက်သည် ဖျက်ရန်</button>
+    <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="openDebtBookDetail('${bookId}')">← နောက်သို့</button>
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+}
+
+async function addDebtPaymentPrompt(bookId, custId){
+  const book = state.debtBooks.find(b => b.id === bookId);
+  const cust = book && book.customers.find(c => c.id === custId);
+  if(!cust) return;
+  const amtStr = prompt('ပေးချေငွေပမာဏ ထည့်ပါ');
+  const amt = Number(amtStr);
+  if(!amt || amt <= 0){ showToast('ပမာဏ မှန်ကန်စွာ ထည့်ပါ'); return; }
+  cust.entries.push({ id: uid(), date: Date.now(), amount: amt, note: '', type: 'payment' });
+  setSyncStatus('syncing');
+  await saveDebtBooks();
+  setSyncStatus('ok');
+  openDebtCustomerDetail(bookId, custId);
+  showToast('ပေးချေမှု မှတ်တမ်းတင်ပြီးပါပြီ');
+}
+
+async function deleteDebtCustomerPrompt(bookId, custId){
+  const book = state.debtBooks.find(b => b.id === bookId);
+  if(!book) return;
+  if(!confirm('ဒီဖောက်သည်၏ အကြွေးမှတ်တမ်းအားလုံး ဖျက်မှာသေချာပါသလား?')) return;
+  book.customers = book.customers.filter(c => c.id !== custId);
+  setSyncStatus('syncing');
+  await saveDebtBooks();
+  setSyncStatus('ok');
+  openDebtBookDetail(bookId);
+  showToast('ဖောက်သည် ဖျက်ပြီးပါပြီ');
 }
 
 async function resetShopData(){
