@@ -567,6 +567,29 @@ async function firebaseDelete(key){
   }catch(e){ return null; }
 }
 
+/* Native Firestore collections — one real document per product/sale/debt
+   book, instead of one big JSON blob for the whole list. This is what
+   makes individual saves fast: adding one sale writes ONE small document,
+   not the entire sales history; editing one product's stock touches only
+   that product's document, not all of them. */
+function fsRecordCollection(name){
+  return __fsdb.collection('shops').doc(state.shopCode || 'unknown').collection(name);
+}
+async function firebaseSaveRecord(collectionName, id, data){
+  try{ await fsRecordCollection(collectionName).doc(String(id)).set(data); return true; }
+  catch(e){ return false; }
+}
+async function firebaseDeleteRecord(collectionName, id){
+  try{ await fsRecordCollection(collectionName).doc(String(id)).delete(); return true; }
+  catch(e){ return false; }
+}
+async function firebaseLoadCollection(collectionName){
+  try{
+    const snap = await fsRecordCollection(collectionName).get();
+    return snap.docs.map(d => d.data());
+  }catch(e){ return null; }
+}
+
 async function remoteGet(key){
   const url = getRemoteUrl();
   if(!url) return null;
@@ -741,21 +764,97 @@ function migrateLegacyCostFields(){
 }
 
 async function saveProducts(){
+  if(FIREBASE_READY){
+    // Bulk path (CSV import, reset, first-time migration) — every product
+    // as its own document, all written in parallel.
+    await Promise.all(state.products.map(p => firebaseSaveRecord('products', p.id, p)));
+    return;
+  }
   await saveChunkedList('products', state.products);
   await rawStoreDelete(skey('products')); // clean up the old single-blob key from before this fix
 }
+/* Fast path for the common case — one product changed, not the whole
+   catalog — used by the product edit form and by checkout's stock update. */
+async function saveProductRecords(products){
+  if(FIREBASE_READY){
+    await Promise.all(products.map(p => firebaseSaveRecord('products', p.id, p)));
+    return;
+  }
+  await saveProducts(); // other tiers have no cheaper partial-save option
+}
+async function deleteProductRecord(id){
+  if(FIREBASE_READY){ await firebaseDeleteRecord('products', id); return; }
+  await saveProducts();
+}
 async function loadProductsFromStorage(){
+  if(FIREBASE_READY){
+    const list = await firebaseLoadCollection('products');
+    if(list && list.length) return list;
+    // Not migrated to the per-document scheme yet — try the old chunked
+    // blob (from before this update) and, if found, migrate it now so
+    // future saves are fast from here on.
+    const legacy = await loadChunkedList('products', 'products');
+    if(legacy && legacy.length) await Promise.all(legacy.map(p => firebaseSaveRecord('products', p.id, p)));
+    return legacy;
+  }
   return await loadChunkedList('products', 'products');
 }
 
 async function saveDebtBooks(){
+  if(FIREBASE_READY){
+    await Promise.all(state.debtBooks.map(b => firebaseSaveRecord('debtBooks', b.id, b)));
+    return;
+  }
   await saveChunkedList('debtBooks', state.debtBooks);
 }
+/* Fast path — saving one book (e.g. after a single payment entry) instead
+   of rewriting every debt book in the shop. */
+async function saveDebtBookRecord(book){
+  if(FIREBASE_READY){ await firebaseSaveRecord('debtBooks', book.id, book); return; }
+  await saveDebtBooks();
+}
+async function deleteDebtBookRecord(id){
+  if(FIREBASE_READY){ await firebaseDeleteRecord('debtBooks', id); return; }
+  await saveDebtBooks();
+}
 async function loadDebtBooksFromStorage(){
+  if(FIREBASE_READY){
+    const list = await firebaseLoadCollection('debtBooks');
+    if(list && list.length) return list;
+    const legacy = await loadChunkedList('debtBooks', null);
+    if(legacy && legacy.length) await Promise.all(legacy.map(b => firebaseSaveRecord('debtBooks', b.id, b)));
+    return legacy;
+  }
   return await loadChunkedList('debtBooks', null);
 }
+
 async function saveSales(){
+  if(FIREBASE_READY){
+    await Promise.all(state.sales.map(s => firebaseSaveRecord('sales', s.id, s)));
+    return;
+  }
   await rawStoreSet(skey('sales'), JSON.stringify(state.sales));
+}
+/* Fast path — a checkout only ever adds ONE new sale, so only that one
+   document needs writing instead of the entire (ever-growing) history. */
+async function saveSaleRecord(sale){
+  if(FIREBASE_READY){ await firebaseSaveRecord('sales', sale.id, sale); return; }
+  await saveSales();
+}
+async function deleteSaleRecord(id){
+  if(FIREBASE_READY){ await firebaseDeleteRecord('sales', id); return; }
+  await saveSales();
+}
+async function loadSalesFromStorage(){
+  if(FIREBASE_READY){
+    const list = await firebaseLoadCollection('sales');
+    if(list && list.length) return list;
+    const legacyRaw = await storageGetSafe(skey('sales'));
+    const legacy = safeParse(legacyRaw, null);
+    if(legacy && legacy.length) await Promise.all(legacy.map(s => firebaseSaveRecord('sales', s.id, s)));
+    return legacy;
+  }
+  return safeParse(await storageGetSafe(skey('sales')), null);
 }
 async function saveSettings(){
   await rawStoreSet(skey('settings'), JSON.stringify(state.settings));
@@ -785,7 +884,7 @@ async function runArchiveCheck(){
     state.sales = state.sales.filter(s => s.time >= cutoff);
     await Promise.all([
       rawStoreSet(skey('sales_archive'), JSON.stringify(archive)),
-      saveSales(),
+      FIREBASE_READY ? Promise.all(oldOnes.map(s => deleteSaleRecord(s.id))) : saveSales(),
     ]);
   }
   state.archivedCount = archive.length;
@@ -819,9 +918,9 @@ function safeParse(raw, fallback){
 async function loadShop(code, {seedIfEmpty=false} = {}){
   state.shopCode = code;
   setSyncStatus('syncing');
-  const [pList, sRaw, setRaw, catRaw, cuRaw, stRaw, dbList, uoRaw] = await Promise.all([
+  const [pList, sList, setRaw, catRaw, cuRaw, stRaw, dbList, uoRaw] = await Promise.all([
     loadProductsFromStorage(),
-    storageGetSafe(skey('sales')),
+    loadSalesFromStorage(),
     storageGetSafe(skey('settings')),
     storageGetSafe(skey('categories')),
     storageGetSafe(skey('costUnits')),
@@ -832,7 +931,7 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
 
   state.products = pList || [];
   migrateLegacyCostFields();
-  state.sales = safeParse(sRaw, []);
+  state.sales = sList || [];
   state.categories = safeParse(catRaw, ['အားလုံး']);
   state.costUnits = safeParse(cuRaw, ['ပိသာ','ပြည်','အိတ်']);
   state.unitOptions = safeParse(uoRaw, ['ခု','ပုလင်း','ထုပ်','ပါကင်','ဒါဇင်','ပိသာ','ပြည်','အိတ်']);
@@ -872,9 +971,9 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
 async function manualSync(silent){
   if(!state.shopCode) return;
   setSyncStatus('syncing');
-  const [pList, sRaw, setRaw, catRaw, cuRaw, stRaw, dbList, uoRaw] = await Promise.all([
+  const [pList, sList, setRaw, catRaw, cuRaw, stRaw, dbList, uoRaw] = await Promise.all([
     loadProductsFromStorage(),
-    storageGetSafe(skey('sales')),
+    loadSalesFromStorage(),
     storageGetSafe(skey('settings')),
     storageGetSafe(skey('categories')),
     storageGetSafe(skey('costUnits')),
@@ -883,7 +982,7 @@ async function manualSync(silent){
     storageGetSafe(skey('unitOptions')),
   ]);
   if(pList){ state.products = pList; migrateLegacyCostFields(); }
-  if(sRaw) state.sales = safeParse(sRaw, state.sales);
+  if(sList) state.sales = sList;
   if(setRaw) state.settings = safeParse(setRaw, state.settings);
   if(catRaw) state.categories = safeParse(catRaw, state.categories);
   if(cuRaw) state.costUnits = safeParse(cuRaw, state.costUnits);
@@ -921,15 +1020,13 @@ function startDebtRealtimeSync(){
   if(!FIREBASE_READY || !state.shopCode) return;
   if(__debtUnsub){ try{ __debtUnsub(); }catch(e){} __debtUnsub = null; }
   try{
-    __debtUnsub = __fsdb.collection('shops').doc(state.shopCode)
-      .collection('data').doc(encodeURIComponent(skey('debtBooks:meta')))
-      .onSnapshot(async () => {
-        const overlay = document.getElementById('sheet-overlay');
-        if(overlay && overlay.classList.contains('show')) return;
-        if(state.cart.length > 0) return;
-        const fresh = await loadDebtBooksFromStorage();
-        if(fresh){ state.debtBooks = fresh; if(state.activeScreen==='settings') renderScreen(); }
-      }, () => {});
+    __debtUnsub = fsRecordCollection('debtBooks').onSnapshot(snap => {
+      const overlay = document.getElementById('sheet-overlay');
+      if(overlay && overlay.classList.contains('show')) return;
+      if(state.cart.length > 0) return;
+      state.debtBooks = snap.docs.map(d => d.data());
+      if(state.activeScreen==='settings') renderScreen();
+    }, () => {});
   }catch(e){}
 }
 
@@ -1772,22 +1869,29 @@ async function checkout(){
     customer: (customerName || customerPhone) ? { name: customerName, phone: customerPhone } : null,
     debtBookId, debtCustomerId,
   };
+  const changedProducts = [];
   state.cart.forEach(c => {
     const p = state.products.find(x => x.id === c.id);
-    if(p) p.stock = Math.max(0, p.stock - c.qty);
+    if(p){ p.stock = Math.max(0, p.stock - c.qty); changedProducts.push(p); }
   });
   state.sales.push(sale);
 
+  let debtBookToSave = null;
   if(state.paymentType === 'credit' && debtBookId && debtCustomerId){
     const book = state.debtBooks.find(b => b.id === debtBookId);
     const cust = book && book.customers.find(c => c.id === debtCustomerId);
     if(cust){
       cust.entries.push({ id: uid(), date: Date.now(), amount: total, note: `အော်ဒါ #${sale.id.slice(-5).toUpperCase()}`, type:'debt', saleId: sale.id });
+      debtBookToSave = book;
     }
   }
 
   setSyncStatus('syncing');
-  await Promise.all([saveSales(), saveProducts(), state.paymentType==='credit' ? saveDebtBooks() : Promise.resolve()]);
+  await Promise.all([
+    saveSaleRecord(sale),
+    saveProductRecords(changedProducts),
+    debtBookToSave ? saveDebtBookRecord(debtBookToSave) : Promise.resolve(),
+  ]);
   setSyncStatus('ok');
 
   state.cart = [];
@@ -2046,15 +2150,18 @@ async function saveProductForm(id){
   }
 
   const extra = { priceWholesale, priceVIP, costUnit, costValue, unit };
+  let savedProduct;
   if(id){
     const p = state.products.find(x => x.id === id);
     Object.assign(p, { name, category, price, stock, icon: window.__selectedIcon }, extra);
+    savedProduct = p;
   } else {
-    state.products.push(Object.assign({ id: uid(), name, category, price, stock, icon: window.__selectedIcon }, extra));
+    savedProduct = Object.assign({ id: uid(), name, category, price, stock, icon: window.__selectedIcon }, extra);
+    state.products.push(savedProduct);
   }
 
   setSyncStatus('syncing');
-  await Promise.all([saveProducts(), saveCategories(), costUnitsChanged ? saveCostUnits() : Promise.resolve(), unitOptionsChanged ? saveUnitOptions() : Promise.resolve()]);
+  await Promise.all([saveProductRecords([savedProduct]), saveCategories(), costUnitsChanged ? saveCostUnits() : Promise.resolve(), unitOptionsChanged ? saveUnitOptions() : Promise.resolve()]);
   setSyncStatus('ok');
   closeSheet();
   renderScreen();
@@ -2065,7 +2172,7 @@ async function deleteProduct(id){
   if(!confirm('ဒီကုန်ပစ္စည်းကို ဖျက်မှာသေချာပါသလား?')) return;
   state.products = state.products.filter(p => p.id !== id);
   setSyncStatus('syncing');
-  await saveProducts();
+  await deleteProductRecord(id);
   setSyncStatus('ok');
   renderScreen();
   showToast('ဖျက်ပြီးပါပြီ');
@@ -2457,9 +2564,10 @@ async function createDebtBookPrompt(){
   const name = (prompt('အကြွေးစာရင်းစာအုပ် အမည် ထည့်ပါ (ဥပမာ - ရွာသူကြီးလမ်း)') || '').trim();
   if(!name) return;
   await refreshDebtBooksBeforeWrite();
-  state.debtBooks.push({ id: uid(), name, customers: [] });
+  const newBook = { id: uid(), name, customers: [] };
+  state.debtBooks.push(newBook);
   setSyncStatus('syncing');
-  await saveDebtBooks();
+  await saveDebtBookRecord(newBook);
   setSyncStatus('ok');
   renderScreen();
   showToast('အကြွေးစာရင်းစာအုပ် အသစ် ဖွင့်ပြီးပါပြီ');
@@ -2470,7 +2578,7 @@ async function deleteDebtBook(id){
   await refreshDebtBooksBeforeWrite();
   state.debtBooks = state.debtBooks.filter(b => b.id !== id);
   setSyncStatus('syncing');
-  await saveDebtBooks();
+  await deleteDebtBookRecord(id);
   setSyncStatus('ok');
   renderScreen();
   showToast('စာအုပ် ဖျက်ပြီးပါပြီ');
@@ -2514,7 +2622,7 @@ async function addDebtCustomerPrompt(bookId){
   if(!book){ showToast('စာအုပ် ရှာမတွေ့ပါ'); return; }
   book.customers.push({ id: uid(), name, phone, entries: [] });
   setSyncStatus('syncing');
-  await saveDebtBooks();
+  await saveDebtBookRecord(book);
   setSyncStatus('ok');
   openDebtBookDetail(bookId);
   showToast('ဖောက်သည်အသစ် ထည့်ပြီးပါပြီ');
@@ -2563,7 +2671,7 @@ async function addDebtPaymentPrompt(bookId, custId){
   if(!cust){ showToast('ဖောက်သည် ရှာမတွေ့ပါ'); return; }
   cust.entries.push({ id: uid(), date: Date.now(), amount: amt, note: '', type: 'payment' });
   setSyncStatus('syncing');
-  await saveDebtBooks();
+  await saveDebtBookRecord(book);
   setSyncStatus('ok');
   openDebtCustomerDetail(bookId, custId);
   showToast('ပေးချေမှု မှတ်တမ်းတင်ပြီးပါပြီ');
@@ -2576,10 +2684,17 @@ async function deleteDebtCustomerPrompt(bookId, custId){
   if(!book){ showToast('စာအုပ် ရှာမတွေ့ပါ'); return; }
   book.customers = book.customers.filter(c => c.id !== custId);
   setSyncStatus('syncing');
-  await saveDebtBooks();
+  await saveDebtBookRecord(book);
   setSyncStatus('ok');
   openDebtBookDetail(bookId);
   showToast('ဖောက်သည် ဖျက်ပြီးပါပြီ');
+}
+
+async function firebaseClearCollection(name){
+  try{
+    const snap = await fsRecordCollection(name).get();
+    await Promise.all(snap.docs.map(d => d.ref.delete()));
+  }catch(e){}
 }
 
 async function resetShopData(){
@@ -2591,7 +2706,16 @@ async function resetShopData(){
   state.currentStaffId = null;
   state.archivedCount = 0;
   setSyncStatus('syncing');
-  await Promise.all([saveProducts(), saveSales(), saveCategories(), saveStaff(), rawStoreSet(skey('sales_archive'), JSON.stringify([]))]);
+  if(FIREBASE_READY){
+    await Promise.all([
+      firebaseClearCollection('products'),
+      firebaseClearCollection('sales'),
+      saveCategories(), saveStaff(),
+      rawStoreSet(skey('sales_archive'), JSON.stringify([])),
+    ]);
+  } else {
+    await Promise.all([saveProducts(), saveSales(), saveCategories(), saveStaff(), rawStoreSet(skey('sales_archive'), JSON.stringify([]))]);
+  }
   setSyncStatus('ok');
   renderTopbar();
   renderScreen();
@@ -2671,7 +2795,7 @@ function openFirebaseSetup(){
       <b>⚠️ အရေးကြီး — Test mode သက်တမ်း</b><br>
       Test mode က ရက် ၃၀ ပြီးရင် ပိတ်သွားပါတယ်။ မပိတ်အောင် Firestore > <b>Rules</b> tab သွားပြီး အောက်က rule ကို ကူးထည့်ကာ Publish နှိပ်ပါ:<br>
       <code style="display:block; background:#fff; padding:8px; border-radius:6px; margin-top:6px; font-size:10px; white-space:pre; overflow-x:auto;">rules_version = '2';
-service in cloud.firestore {
+service cloud.firestore {
   match /databases/{db}/documents {
     match /{document=**} {
       allow read, write: if true;
