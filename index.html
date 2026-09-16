@@ -8,6 +8,7 @@
 <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
 <noscript><link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
 <style>
   :root{
     --primary:#0B4D3C;
@@ -233,6 +234,7 @@
   .cart-line .cl-price{ font-size:11.5px; color:var(--text-muted); }
   .tier-chips{ display:flex; gap:4px; margin-top:4px; }
   .tier-chip{ font-size:10px; padding:2px 8px; border-radius:20px; border:1px solid var(--border); cursor:pointer; color:var(--text-muted); background:var(--bg); }
+  .cl-unit-select{ font-size:11px; padding:2px 4px; margin-top:4px; border-radius:6px; border:1px solid var(--border); color:var(--text-muted); max-width:110px; }
   .tier-chip.active{ background:var(--primary); color:#fff; border-color:var(--primary); }
   .qty-stepper{ display:flex; align-items:center; gap:8px; }
   .qty-stepper button{ width:26px; height:26px; border-radius:7px; border:1px solid var(--border); background:var(--bg); cursor:pointer; font-weight:800; color:var(--primary); }
@@ -250,13 +252,19 @@
   .summary-row.total{ font-size:17px; font-weight:800; margin-top:10px; padding-top:10px; border-top:1.5px dashed var(--border); }
 
   /* ---------- Receipt ---------- */
-  .receipt{ font-family:'Manrope',monospace; }
-  .receipt .r-head{ text-align:center; margin-bottom:14px; }
-  .receipt .r-head .sn{ font-weight:800; font-size:16px; }
-  .receipt .r-head .sd{ font-size:11.5px; color:var(--text-muted); margin-top:2px; }
-  .receipt .r-line{ display:flex; justify-content:space-between; font-size:13px; padding:5px 0; }
-  .receipt .r-divider{ border-top:1px dashed var(--border); margin:8px 0; }
-  .receipt .r-total{ font-weight:800; font-size:16px; }
+  .receipt{ font-family:'Manrope',sans-serif; color:#7a2e18; background:#eef2e2; padding:14px; border-radius:8px; }
+  .receipt .rv-title{ text-align:center; font-weight:800; font-size:15px; line-height:1.4; }
+  .receipt .rv-address{ text-align:center; font-size:11px; margin-top:4px; }
+  .receipt .rv-phones{ text-align:center; font-size:11px; margin-top:2px; }
+  .receipt .rv-meta{ margin-top:10px; font-size:11.5px; border-top:1px dashed #7a2e18; padding-top:8px; }
+  .receipt .rv-meta div{ display:flex; justify-content:space-between; margin-bottom:3px; }
+  .receipt table.rv-table{ width:100%; border-collapse:collapse; margin-top:10px; font-size:12px; }
+  .receipt table.rv-table th, .receipt table.rv-table td{ border:1px solid #7a2e18; padding:4px 6px; }
+  .receipt table.rv-table th{ font-size:11px; }
+  .receipt table.rv-table td.num{ text-align:right; }
+  .receipt .rv-total-row td{ font-weight:800; }
+  .receipt .rv-footnote{ font-size:10px; margin-top:8px; line-height:1.5; }
+  .receipt .rv-bottom{ display:flex; justify-content:space-between; margin-top:10px; font-size:11.5px; }
 
   .toast{
     position:fixed; left:50%; transform:translateX(-50%); bottom:100px; z-index:60; background:var(--primary-dark); color:#fff;
@@ -446,11 +454,12 @@ function doPost(e){
 let state = {
   shopCode: null,
   shopName: 'ဦးတင်အောင် ကုန်စုံဆိုင်',
-  settings: { currency: 'Ks', shopName: 'ဦးတင်အောင် ကုန်စုံဆိုင်', archiveDays: 90 },
+  settings: { currency: 'Ks', shopName: 'ဦးတင်အောင် ကုန်စုံဆိုင်', address: 'အမှတ်(၁၂၇)၊ အနောက်မြို့ပတ်လမ်း၊ တိုက်ကြီးမြို့', shopPhones: '09 973581254, 09 5394454', homePhones: '09 5394168, 09 979095560, 09 783619223', archiveDays: 90 },
   products: [],
   sales: [],
   categories: ['အားလုံး'],
   costUnits: ['ပိသာ','ပြည်','အိတ်'],
+  unitOptions: ['ခု','ပုလင်း','ထုပ်','ပါကင်','ဒါဇင်','ပိသာ','ပြည်','အိတ်'],
   debtBooks: [],      // {id, name, customers:[{id,name,phone,entries:[{id,date,amount,note,type}]}]}
   cart: [],           // {id, name, price, qty, icon, unit}
   activeCategory: 'အားလုံး',
@@ -676,6 +685,9 @@ async function saveCategories(){
 async function saveCostUnits(){
   await rawStoreSet(skey('costUnits'), JSON.stringify(state.costUnits));
 }
+async function saveUnitOptions(){
+  await rawStoreSet(skey('unitOptions'), JSON.stringify(state.unitOptions));
+}
 async function saveStaff(){
   await rawStoreSet(skey('staff'), JSON.stringify(state.staff));
 }
@@ -726,7 +738,7 @@ function safeParse(raw, fallback){
 async function loadShop(code, {seedIfEmpty=false} = {}){
   state.shopCode = code;
   setSyncStatus('syncing');
-  const [pList, sRaw, setRaw, catRaw, cuRaw, stRaw, dbList] = await Promise.all([
+  const [pList, sRaw, setRaw, catRaw, cuRaw, stRaw, dbList, uoRaw] = await Promise.all([
     loadProductsFromStorage(),
     storageGetSafe(skey('sales')),
     storageGetSafe(skey('settings')),
@@ -734,6 +746,7 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
     storageGetSafe(skey('costUnits')),
     storageGetSafe(skey('staff')),
     loadDebtBooksFromStorage(),
+    storageGetSafe(skey('unitOptions')),
   ]);
 
   state.products = pList || [];
@@ -741,7 +754,8 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
   state.sales = safeParse(sRaw, []);
   state.categories = safeParse(catRaw, ['အားလုံး']);
   state.costUnits = safeParse(cuRaw, ['ပိသာ','ပြည်','အိတ်']);
-  state.settings = safeParse(setRaw, { currency:'Ks', shopName:'ဦးတင်အောင် ကုန်စုံဆိုင်' });
+  state.unitOptions = safeParse(uoRaw, ['ခု','ပုလင်း','ထုပ်','ပါကင်','ဒါဇင်','ပိသာ','ပြည်','အိတ်']);
+  state.settings = safeParse(setRaw, { currency:'Ks', shopName:'ဦးတင်အောင် ကုန်စုံဆိုင်', address:'အမှတ်(၁၂၇)၊ အနောက်မြို့ပတ်လမ်း၊ တိုက်ကြီးမြို့', shopPhones:'09 973581254, 09 5394454', homePhones:'09 5394168, 09 979095560, 09 783619223' });
   state.staff = safeParse(stRaw, []);
   state.debtBooks = dbList || [];
 
@@ -773,10 +787,10 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
   }
 }
 
-async function manualSync(){
+async function manualSync(silent){
   if(!state.shopCode) return;
   setSyncStatus('syncing');
-  const [pList, sRaw, setRaw, catRaw, cuRaw, stRaw, dbList] = await Promise.all([
+  const [pList, sRaw, setRaw, catRaw, cuRaw, stRaw, dbList, uoRaw] = await Promise.all([
     loadProductsFromStorage(),
     storageGetSafe(skey('sales')),
     storageGetSafe(skey('settings')),
@@ -784,19 +798,21 @@ async function manualSync(){
     storageGetSafe(skey('costUnits')),
     storageGetSafe(skey('staff')),
     loadDebtBooksFromStorage(),
+    storageGetSafe(skey('unitOptions')),
   ]);
   if(pList){ state.products = pList; migrateLegacyCostFields(); }
   if(sRaw) state.sales = safeParse(sRaw, state.sales);
   if(setRaw) state.settings = safeParse(setRaw, state.settings);
   if(catRaw) state.categories = safeParse(catRaw, state.categories);
   if(cuRaw) state.costUnits = safeParse(cuRaw, state.costUnits);
+  if(uoRaw) state.unitOptions = safeParse(uoRaw, state.unitOptions);
   if(stRaw) state.staff = safeParse(stRaw, state.staff);
   if(dbList) state.debtBooks = dbList;
   await runArchiveCheck();
   setSyncStatus('ok');
   renderTopbar();
   renderScreen();
-  showToast('ဒေတာအသစ် sync ပြီးပါပြီ');
+  if(!silent) showToast('ဒေတာအသစ် sync ပြီးပါပြီ');
 }
 
 function setSyncStatus(s){
@@ -827,6 +843,31 @@ async function initApp(){
     console.error('hasanpos: failed to start app', err);
     renderStartupError();
   }
+  startBackgroundSync();
+}
+
+/* Debt data involves real money, so instead of relying only on whatever
+   was last pulled, we quietly re-sync every so often while the app sits
+   open — and skip it while a sheet is open or the cart has items, so it
+   never overwrites something the person is in the middle of entering. */
+function startBackgroundSync(){
+  setInterval(async () => {
+    if(!state.shopCode || syncMode() === 'local') return;
+    const overlay = document.getElementById('sheet-overlay');
+    if(overlay && overlay.classList.contains('show')) return;
+    if(state.cart.length > 0) return;
+    try{ await manualSync(true); }catch(e){}
+  }, 30000);
+}
+
+/* Called right before any debt-book write so a second device's changes
+   (another sale, another payment) aren't silently overwritten by this
+   device saving its own copy of the whole list. */
+async function refreshDebtBooksBeforeWrite(){
+  try{
+    const fresh = await loadDebtBooksFromStorage();
+    if(fresh) state.debtBooks = fresh;
+  }catch(e){}
 }
 
 /* Safety net: if startup ever fails for an unexpected reason, show a recovery
@@ -1397,6 +1438,12 @@ function setCartLineTier(id, tier){
   renderCartSheetContent();
   renderCartBar();
 }
+function setCartLineUnit(id, unit){
+  const line = state.cart.find(c => c.id === id);
+  if(!line) return;
+  line.unit = unit;
+  // no re-render needed — the <select> already reflects the chosen value
+}
 
 function renderCartBar(){
   let existing = document.getElementById('cart-bar');
@@ -1448,7 +1495,10 @@ function renderCartSheetContent(){
           <div class="cl-icon">${c.icon||'🛒'}</div>
           <div class="cl-info">
             <div class="cl-name">${c.name}</div>
-            <div class="cl-price">${money(c.price)}${c.unit ? ' / '+c.unit : ''}</div>
+            <div class="cl-price">${money(c.price)}</div>
+            <select class="cl-unit-select" onchange="setCartLineUnit('${c.id}', this.value)">
+              ${state.unitOptions.map(u => `<option ${ (c.unit||'')===u ? 'selected':''}>${u}</option>`).join('')}
+            </select>
             ${ hasTiers ? `
               <div class="tier-chips">
                 ${['retail','wholesale','vip'].map(t => `<div class="tier-chip ${ (c.tier||'retail')===t ? 'active':''}" onclick="setCartLineTier('${c.id}','${t}')">${tierLabel(t)}</div>`).join('')}
@@ -1568,6 +1618,7 @@ async function checkout(){
   let customerName = '', customerPhone = '', debtBookId = null, debtCustomerId = null;
 
   if(state.paymentType === 'credit'){
+    await refreshDebtBooksBeforeWrite();
     let bookId = state.checkoutDebtBookId;
     if(!bookId){ showToast('အကြွေးစာရင်းစာအုပ် ရွေးပါ'); return; }
     if(bookId === '__new__'){
@@ -1653,31 +1704,46 @@ function openReceipt(saleId, justCompleted){
   const s = state.sales.find(x => x.id === saleId);
   if(!s) return;
   const d = new Date(s.time);
+  const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const voucherNo = s.id.replace(/[^0-9]/g,'').slice(-5).padStart(5,'0') || '00000';
   document.getElementById('sheet-content').innerHTML = `
     <div class="sheet-handle"></div>
-    <div class="sheet-header"><h3>${justCompleted ? 'အရောင်း အောင်မြင်ပါသည် ✓' : 'ဘောက်ချာ'}</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-header"><h3>${justCompleted ? 'အရောင်း အောင်မြင်ပါသည် ✓' : 'ဘောင်ချာ'}</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
     <div class="receipt" id="receipt-print-area">
-      <div class="r-head">
-        <div class="sn">${state.settings.shopName || 'ဦးတင်အောင် ကုန်စုံဆိုင်'}</div>
-        <div class="sd">${d.toLocaleDateString('my-MM')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')} · #${s.id.slice(-5).toUpperCase()}</div>
+      <div class="rv-title">${state.settings.shopName || 'ဦးတင်အောင် ကုန်စုံဆိုင်'}</div>
+      ${ state.settings.address ? `<div class="rv-address">${escapeAttr(state.settings.address)}</div>` : '' }
+      ${ state.settings.shopPhones ? `<div class="rv-phones">ဆိုင်ဖုန်း - ${escapeAttr(state.settings.shopPhones)}</div>` : '' }
+      ${ state.settings.homePhones ? `<div class="rv-phones">အိမ်ဖုန်း - ${escapeAttr(state.settings.homePhones)}</div>` : '' }
+
+      <div class="rv-meta">
+        <div><span>ဝယ်သူအမည် - ${s.customer && s.customer.name ? escapeAttr(s.customer.name) : '.......................'}</span><span>ဖုန်း - ${s.customer && s.customer.phone ? escapeAttr(s.customer.phone) : '..............'}</span></div>
+        <div><span>ရောင်းသူအမည် - ${s.cashierName ? escapeAttr(s.cashierName) : '.......................'}</span><span>ရက်စွဲ - ${dateStr}</span></div>
       </div>
-      ${ s.customer && (s.customer.name || s.customer.phone) ? `
-        <div class="r-divider"></div>
-        ${ s.customer.name ? `<div class="r-line"><span class="muted">ဖောက်သည်</span><span>${escapeAttr(s.customer.name)}</span></div>` : '' }
-        ${ s.customer.phone ? `<div class="r-line"><span class="muted">ဖုန်း</span><span>${escapeAttr(s.customer.phone)}</span></div>` : '' }
-      ` : '' }
-      <div class="r-divider"></div>
-      ${ s.items.map(it => `
-        <div class="r-line"><span>${it.name} × ${it.qty}${it.unit ? ' '+it.unit : ''}</span><span>${money(it.price*it.qty)}</span></div>
-      `).join('') }
-      <div class="r-divider"></div>
-      <div class="r-line"><span>စုစုပေါင်း</span><span>${money(s.subtotal)}</span></div>
-      ${ s.discountPct>0 ? `<div class="r-line"><span>လျှော့စျေး (${s.discountPct}%)</span><span>-${money(s.subtotal - s.total)}</span></div>` : '' }
-      <div class="r-line r-total"><span>ကျသင့်ငွေ</span><span>${money(s.total)}</span></div>
-      <div class="r-line"><span class="muted">ငွေပေးချေမှု</span><span>${paymentLabel(s.paymentMethod)}${s.paymentType==='credit' ? ' 📒' : ''}</span></div>
-      ${ s.cashierName ? `<div class="r-line"><span class="muted">ရောင်းချသူ</span><span>${s.cashierName}</span></div>` : '' }
+
+      <table class="rv-table">
+        <tr><th>အမျိုးအမည်</th><th>အရေအတွက်</th><th>နှုန်း</th><th>သင့်ငွေ</th></tr>
+        ${ s.items.map(it => `
+          <tr>
+            <td>${escapeAttr(it.name)}</td>
+            <td class="num">${it.qty}${it.unit ? ' '+escapeAttr(it.unit) : ''}</td>
+            <td class="num">${fmt(it.price)}</td>
+            <td class="num">${fmt(it.price*it.qty)}</td>
+          </tr>
+        `).join('') }
+        ${ s.discountPct>0 ? `
+          <tr><td colspan="3">လျှော့စျေး (${s.discountPct}%)</td><td class="num">-${fmt(s.subtotal - s.total)}</td></tr>
+        ` : '' }
+        <tr class="rv-total-row"><td colspan="3">စုစုပေါင်း</td><td class="num">${fmt(s.total)} ${state.settings.currency||'Ks'}</td></tr>
+      </table>
+
+      <div class="rv-footnote">${escapeAttr(state.settings.receiptNote || 'ဝယ်ယူပြီးသော ပစ္စည်းများအား ပြန်လည် လဲလှယ်ခြင်း/ ငွေပြန်အမ်းခြင်း မပြုလုပ်ပါ။')}</div>
+
+      <div class="rv-bottom">
+        <span>No. ${voucherNo}</span>
+        <span>${paymentLabel(s.paymentMethod)}${s.paymentType==='credit' ? ' 📒' : ''} · ငွေလက်ခံသူ - ${s.cashierName ? escapeAttr(s.cashierName) : '..............'}</span>
+      </div>
     </div>
-    <button class="btn btn-outline btn-block" style="margin-top:14px;" onclick="printReceipt()">🖨️ ဘောက်ချာ Print ထုတ်မည်</button>
+    <button class="btn btn-outline btn-block" style="margin-top:14px;" onclick="printReceipt()">🖨️ ဘောင်ချာ Print ထုတ်မည်</button>
     <button class="btn btn-primary btn-block" style="margin-top:8px;" onclick="closeSheet()">ပြီးပါပြီ</button>
   `;
   document.getElementById('sheet-overlay').classList.add('show');
@@ -1789,7 +1855,11 @@ function openProductForm(id){
         <input type="number" id="pf-stock" value="${editing ? editing.stock : ''}" placeholder="0">
       </div>
       <div>
-        <input type="text" id="pf-unit" value="${editing && editing.unit ? escapeAttr(editing.unit) : 'ခု'}" placeholder="ယူနစ် (ဥပမာ - ခု၊ ပုလင်း၊ ထုပ်)">
+        <select id="pf-unit">
+          ${state.unitOptions.map(u => `<option ${editing && editing.unit===u ? 'selected':''}>${u}</option>`).join('')}
+          <option value="__new__">+ ယူနစ်အသစ်</option>
+        </select>
+        <input type="text" id="pf-newunit2" placeholder="ယူနစ်အသစ် အမည်" style="display:none; margin-top:8px;">
       </div>
     </div>
 
@@ -1801,6 +1871,9 @@ function openProductForm(id){
   });
   document.getElementById('pf-costunit').addEventListener('change', function(){
     document.getElementById('pf-newunit').style.display = this.value === '__new__' ? 'block' : 'none';
+  });
+  document.getElementById('pf-unit').addEventListener('change', function(){
+    document.getElementById('pf-newunit2').style.display = this.value === '__new__' ? 'block' : 'none';
   });
   document.getElementById('sheet-overlay').classList.add('show');
   updateProfitPreview();
@@ -1847,7 +1920,8 @@ async function saveProductForm(id){
   const newUnit = document.getElementById('pf-newunit').value.trim();
   const costValue = Number(document.getElementById('pf-costvalue').value) || 0;
   const stock = Number(document.getElementById('pf-stock').value) || 0;
-  const unit = document.getElementById('pf-unit').value.trim() || 'ခု';
+  let unit = document.getElementById('pf-unit').value;
+  const newUnit2 = document.getElementById('pf-newunit2').value.trim();
 
   if(!name){ showToast('ကုန်ပစ္စည်းအမည် ထည့်ပါ'); return; }
   if(category === '__new__'){
@@ -1861,6 +1935,12 @@ async function saveProductForm(id){
     costUnit = newUnit;
     if(!state.costUnits.includes(costUnit)){ state.costUnits.push(costUnit); costUnitsChanged = true; }
   }
+  let unitOptionsChanged = false;
+  if(unit === '__new__'){
+    if(!newUnit2){ showToast('ယူနစ်အမည် ထည့်ပါ'); return; }
+    unit = newUnit2;
+    if(!state.unitOptions.includes(unit)){ state.unitOptions.push(unit); unitOptionsChanged = true; }
+  }
 
   const extra = { priceWholesale, priceVIP, costUnit, costValue, unit };
   if(id){
@@ -1871,7 +1951,7 @@ async function saveProductForm(id){
   }
 
   setSyncStatus('syncing');
-  await Promise.all([saveProducts(), saveCategories(), costUnitsChanged ? saveCostUnits() : Promise.resolve()]);
+  await Promise.all([saveProducts(), saveCategories(), costUnitsChanged ? saveCostUnits() : Promise.resolve(), unitOptionsChanged ? saveUnitOptions() : Promise.resolve()]);
   setSyncStatus('ok');
   closeSheet();
   renderScreen();
@@ -1992,10 +2072,16 @@ function drawChart(){
 /* ============ SETTINGS ============ */
 function renderSettings(){
   return `
-    <div class="section-title">ဆိုင်အချက်အလက်</div>
+    <div class="section-title">ဆိုင်အချက်အလက် (ဘောင်ချာပေါ်တွင် ပြသပါမည်)</div>
     <div class="card">
       <label>ဆိုင်နာမည်</label>
       <input type="text" id="st-shopname" value="${escapeAttr(state.settings.shopName||'')}">
+      <label>လိပ်စာ</label>
+      <input type="text" id="st-address" value="${escapeAttr(state.settings.address||'')}" placeholder="အမှတ်၊ လမ်း၊ မြို့">
+      <label>ဆိုင်ဖုန်း (comma ခံ ရေးပါ)</label>
+      <input type="text" id="st-shopphones" value="${escapeAttr(state.settings.shopPhones||'')}" placeholder="09xxxxxxxxx, 09xxxxxxxxx">
+      <label>အိမ်ဖုန်း (comma ခံ ရေးပါ)</label>
+      <input type="text" id="st-homephones" value="${escapeAttr(state.settings.homePhones||'')}" placeholder="09xxxxxxxxx, 09xxxxxxxxx">
       <label>ငွေကြေးအမှတ်အသား</label>
       <input type="text" id="st-currency" value="${escapeAttr(state.settings.currency||'Ks')}">
       <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="saveShopSettings()">သိမ်းမည်</button>
@@ -2083,6 +2169,7 @@ function renderSettings(){
           `; }).join('') }
       </div>
       <button class="btn btn-ghost btn-block" style="margin-top:12px;" onclick="createDebtBookPrompt()">+ အကြွေးစာရင်းစာအုပ် အသစ်ဖွင့်မည်</button>
+      ${ state.debtBooks.length>0 ? `<button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="exportDebtBooksXLSX()">📊 Excel (.xlsx) အဖြစ် Backup ယူမည်</button>` : '' }
     </div>
 
     <div class="section-title">ဒေတာ Export & Backup</div>
@@ -2119,7 +2206,10 @@ function renderSettings(){
 }
 
 async function saveShopSettings(){
-  state.settings.shopName = document.getElementById('st-shopname').value.trim() || 'Hasan POS';
+  state.settings.shopName = document.getElementById('st-shopname').value.trim() || 'ဦးတင်အောင် ကုန်စုံဆိုင်';
+  state.settings.address = document.getElementById('st-address').value.trim();
+  state.settings.shopPhones = document.getElementById('st-shopphones').value.trim();
+  state.settings.homePhones = document.getElementById('st-homephones').value.trim();
   state.settings.currency = document.getElementById('st-currency').value.trim() || 'Ks';
   const daysInput = document.getElementById('st-archivedays');
   if(daysInput) state.settings.archiveDays = Math.max(7, Number(daysInput.value) || 90);
@@ -2219,9 +2309,42 @@ function debtBalance(customer){
   return customer.entries.reduce((sum, e) => sum + (e.type === 'payment' ? -e.amount : e.amount), 0);
 }
 
+/* Exports every debt book to a real .xlsx workbook (via the SheetJS
+   library) so it opens directly in Excel or Google Sheets — one sheet
+   with each customer's current balance, and one with the full entry
+   history, useful as an offline backup of the credit ledger. */
+function exportDebtBooksXLSX(){
+  if(typeof XLSX === 'undefined'){ showToast('Export library မတင်ရသေးပါ — network ချိတ်ဆက်မှု စစ်ပြီး ထပ်စမ်းပါ'); return; }
+  if(state.debtBooks.length === 0){ showToast('အကြွေးစာရင်းစာအုပ် မရှိသေးပါ'); return; }
+
+  const balanceRows = [['စာအုပ်','ဖောက်သည်','ဖုန်း','ကျန်ငွေ']];
+  const entryRows = [['စာအုပ်','ဖောက်သည်','ဖုန်း','ရက်စွဲ','အမျိုးအစား','ပမာဏ','မှတ်ချက်']];
+
+  state.debtBooks.forEach(book => {
+    book.customers.forEach(c => {
+      balanceRows.push([book.name, c.name, c.phone||'', debtBalance(c)]);
+      [...c.entries].sort((a,b)=>a.date-b.date).forEach(e => {
+        entryRows.push([
+          book.name, c.name, c.phone||'',
+          new Date(e.date).toISOString().slice(0,10),
+          e.type==='payment' ? 'ပေးချေငွေ' : 'အကြွေး',
+          e.amount, e.note||''
+        ]);
+      });
+    });
+  });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(balanceRows), 'ကျန်ငွေစုစုပေါင်း');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(entryRows), 'မှတ်တမ်းအသေးစိတ်');
+  XLSX.writeFile(wb, `hasanpos-debtbooks-${dateStamp()}.xlsx`);
+  showToast('အကြွေးစာရင်း Excel ဖိုင် Export ပြီးပါပြီ');
+}
+
 async function createDebtBookPrompt(){
   const name = (prompt('အကြွေးစာရင်းစာအုပ် အမည် ထည့်ပါ (ဥပမာ - ရွာသူကြီးလမ်း)') || '').trim();
   if(!name) return;
+  await refreshDebtBooksBeforeWrite();
   state.debtBooks.push({ id: uid(), name, customers: [] });
   setSyncStatus('syncing');
   await saveDebtBooks();
@@ -2232,6 +2355,7 @@ async function createDebtBookPrompt(){
 
 async function deleteDebtBook(id){
   if(!confirm('ဒီစာအုပ်နှင့် ပါဝင်သော ဖောက်သည် အကြွေးမှတ်တမ်းအားလုံး ဖျက်မှာသေချာပါသလား?')) return;
+  await refreshDebtBooksBeforeWrite();
   state.debtBooks = state.debtBooks.filter(b => b.id !== id);
   setSyncStatus('syncing');
   await saveDebtBooks();
@@ -2270,11 +2394,12 @@ function openSettingsFromDebtBook(){
 }
 
 async function addDebtCustomerPrompt(bookId){
-  const book = state.debtBooks.find(b => b.id === bookId);
-  if(!book) return;
   const name = (prompt('ဖောက်သည်အမည် ထည့်ပါ') || '').trim();
   if(!name) return;
   const phone = (prompt('ဖုန်းနံပါတ် (ရွေးချယ်ခွင့်၊ ချန်ထားနိုင်သည်)') || '').trim();
+  await refreshDebtBooksBeforeWrite();
+  const book = state.debtBooks.find(b => b.id === bookId);
+  if(!book){ showToast('စာအုပ် ရှာမတွေ့ပါ'); return; }
   book.customers.push({ id: uid(), name, phone, entries: [] });
   setSyncStatus('syncing');
   await saveDebtBooks();
@@ -2317,12 +2442,13 @@ function openDebtCustomerDetail(bookId, custId){
 }
 
 async function addDebtPaymentPrompt(bookId, custId){
-  const book = state.debtBooks.find(b => b.id === bookId);
-  const cust = book && book.customers.find(c => c.id === custId);
-  if(!cust) return;
   const amtStr = prompt('ပေးချေငွေပမာဏ ထည့်ပါ');
   const amt = Number(amtStr);
   if(!amt || amt <= 0){ showToast('ပမာဏ မှန်ကန်စွာ ထည့်ပါ'); return; }
+  await refreshDebtBooksBeforeWrite();
+  const book = state.debtBooks.find(b => b.id === bookId);
+  const cust = book && book.customers.find(c => c.id === custId);
+  if(!cust){ showToast('ဖောက်သည် ရှာမတွေ့ပါ'); return; }
   cust.entries.push({ id: uid(), date: Date.now(), amount: amt, note: '', type: 'payment' });
   setSyncStatus('syncing');
   await saveDebtBooks();
@@ -2332,9 +2458,10 @@ async function addDebtPaymentPrompt(bookId, custId){
 }
 
 async function deleteDebtCustomerPrompt(bookId, custId){
-  const book = state.debtBooks.find(b => b.id === bookId);
-  if(!book) return;
   if(!confirm('ဒီဖောက်သည်၏ အကြွေးမှတ်တမ်းအားလုံး ဖျက်မှာသေချာပါသလား?')) return;
+  await refreshDebtBooksBeforeWrite();
+  const book = state.debtBooks.find(b => b.id === bookId);
+  if(!book){ showToast('စာအုပ် ရှာမတွေ့ပါ'); return; }
   book.customers = book.customers.filter(c => c.id !== custId);
   setSyncStatus('syncing');
   await saveDebtBooks();
