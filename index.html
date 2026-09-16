@@ -2662,7 +2662,7 @@ function openFirebaseSetup(){
   "appId": "1:123...:web:abc..."
 }' style="width:100%; box-sizing:border-box; font-family:monospace; font-size:11px;">${cfg ? escapeAttr(JSON.stringify(cfg, null, 2)) : ''}</textarea>
 
-    <div class="si-sub" style="margin-top:8px;">* config ထဲက <b>'</b> နဲ့ <b>"</b> ရောနေရင်လည်း အလိုအလျောက် ပြင်ပေးပါမည်</div>
+    <div class="si-sub" style="margin-top:8px;">* Firebase console က ပေးတဲ့ code အပြည့်အစုံ (import လိုင်းတွေ၊ မှတ်ချက်တွေ ပါလည်း ရပါတယ်) ကို တိုက်ရိုက် ကူးထည့်လို့ ရပါတယ်</div>
 
     <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="saveFirebaseConfig()">ချိတ်ဆက်ပြီး သိမ်းမည်</button>
     ${ cfg ? `<button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="disconnectFirebase()">Firebase ဖြုတ်မည်</button>` : '' }
@@ -2683,25 +2683,37 @@ service in cloud.firestore {
   document.getElementById('sheet-overlay').classList.add('show');
 }
 
-async function saveFirebaseConfig(){
-  let raw = document.getElementById('fb-config').value.trim();
-  if(!raw){ showToast('Firebase config ထည့်ပါ'); return; }
-  // Tolerate the exact shape people copy out of the Firebase console:
-  // a JS object literal with unquoted keys and single quotes.
-  let cfg = null;
+/* The Firebase console hands people a JS snippet, not JSON — unquoted keys,
+   single quotes, import lines, comments, a trailing initializeApp() call.
+   This accepts any of those shapes. Note the key-quoting regex only matches
+   after "{" or "," so it can't corrupt values that contain colons, which
+   appId always does (e.g. "1:1234:web:abcd"). */
+function parseFirebaseConfig(raw){
+  if(!raw || !raw.trim()) return null;
+  try{ return JSON.parse(raw); }catch(e){}
   try{
-    cfg = JSON.parse(raw);
-  }catch(e){
-    try{
-      const cleaned = raw
-        .replace(/^\s*(const|let|var)\s+\w+\s*=\s*/, '')
-        .replace(/;\s*$/, '')
-        .replace(/(['"])?([A-Za-z0-9_]+)(['"])?\s*:/g, '"$2":')
-        .replace(/'/g, '"')
-        .replace(/,\s*}/g, '}');
-      cfg = JSON.parse(cleaned);
-    }catch(e2){ cfg = null; }
-  }
+    let s = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    const m = s.match(/firebaseConfig\s*=\s*\{/);
+    const start = m ? s.indexOf('{', m.index) : s.indexOf('{');
+    if(start === -1) return null;
+    let depth = 0, end = -1;
+    for(let i = start; i < s.length; i++){
+      if(s[i] === '{') depth++;
+      else if(s[i] === '}'){ depth--; if(depth === 0){ end = i; break; } }
+    }
+    if(end === -1) return null;
+    s = s.slice(start, end + 1);
+    s = s.replace(/([{,]\s*)(?:"|')?([A-Za-z0-9_$]+)(?:"|')?(\s*):/g, '$1"$2"$3:');
+    s = s.replace(/:\s*'([^']*)'/g, (mm, v) => ': ' + JSON.stringify(v));
+    s = s.replace(/,(\s*})/g, '$1');
+    return JSON.parse(s);
+  }catch(e){ return null; }
+}
+
+async function saveFirebaseConfig(){
+  const raw = document.getElementById('fb-config').value.trim();
+  if(!raw){ showToast('Firebase config ထည့်ပါ'); return; }
+  const cfg = parseFirebaseConfig(raw);
   if(!cfg || !cfg.projectId || !cfg.apiKey){
     showToast('Config မှားနေပါသည် — apiKey နှင့် projectId ပါရပါမည်');
     return;
