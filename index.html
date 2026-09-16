@@ -9,6 +9,8 @@
 <noscript><link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-app-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-firestore-compat.js"></script>
 <style>
   :root{
     --primary:#0B4D3C;
@@ -494,9 +496,75 @@ function setRemoteUrlLocal(url){
   try{ localStorage.setItem('hasanpos:remoteApiUrl', (url||'').trim()); }catch(e){}
 }
 function syncMode(){
+  if(FIREBASE_READY) return 'firebase';
   if(CLOUD_AVAILABLE) return 'cloud';
   if(getRemoteUrl()) return 'google';
   return 'local';
+}
+
+/* ---------------- Firebase (Firestore) tier ----------------
+   Preferred backend for a busy shop: unlike the Google Sheet tier it
+   handles two devices writing at once without one silently overwriting
+   the other, keeps working while the internet is down (writes queue up
+   and flush on reconnect), and can push changes to other devices live.
+   Each stored key becomes one document under shops/<shopCode>/data. */
+let FIREBASE_READY = false;
+let __fsdb = null;
+let __debtUnsub = null;
+
+function getFirebaseConfig(){
+  try{
+    const raw = localStorage.getItem('hasanpos:firebaseConfig');
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+function setFirebaseConfigLocal(cfg){
+  try{
+    if(cfg) localStorage.setItem('hasanpos:firebaseConfig', JSON.stringify(cfg));
+    else localStorage.removeItem('hasanpos:firebaseConfig');
+  }catch(e){}
+}
+
+function initFirebase(){
+  const cfg = getFirebaseConfig();
+  if(!cfg || !cfg.projectId || typeof firebase === 'undefined') return false;
+  try{
+    if(!firebase.apps.length) firebase.initializeApp(cfg);
+    __fsdb = firebase.firestore();
+    // Offline cache: the shop keeps selling through an internet outage and
+    // everything written meanwhile is flushed automatically on reconnect.
+    __fsdb.enablePersistence({ synchronizeTabs:true }).catch(()=>{});
+    FIREBASE_READY = true;
+    return true;
+  }catch(e){
+    console.error('hasanpos: firebase init failed', e);
+    FIREBASE_READY = false;
+    return false;
+  }
+}
+
+function fsDoc(key){
+  // Firestore document ids cannot contain "/", so the key is encoded.
+  return __fsdb.collection('shops').doc(state.shopCode || 'unknown')
+               .collection('data').doc(encodeURIComponent(key));
+}
+async function firebaseGet(key){
+  try{
+    const snap = await fsDoc(key).get();
+    return snap.exists ? (snap.data().value ?? null) : null;
+  }catch(e){ return null; }
+}
+async function firebaseSet(key, value){
+  try{
+    await fsDoc(key).set({ value, updatedAt: Date.now() });
+    return { key, value };
+  }catch(e){ return null; }
+}
+async function firebaseDelete(key){
+  try{
+    await fsDoc(key).delete();
+    return { key, deleted:true };
+  }catch(e){ return null; }
 }
 
 async function remoteGet(key){
@@ -536,6 +604,11 @@ async function remoteDelete(key){
 }
 
 async function rawStoreGet(key){
+  if(FIREBASE_READY){
+    const v = await firebaseGet(key);
+    if(v !== null){ try{ localStorage.setItem(key, v); }catch(e){} return v; }
+    try{ return localStorage.getItem(key); }catch(e){ return null; }
+  }
   if(CLOUD_AVAILABLE){
     try{ const r = await window.storage.get(key, true); return r ? r.value : null; }catch(e){ return null; }
   }
@@ -548,6 +621,10 @@ async function rawStoreGet(key){
   try{ return localStorage.getItem(key); }catch(e){ return null; }
 }
 async function rawStoreSet(key, value){
+  if(FIREBASE_READY){
+    try{ localStorage.setItem(key, value); }catch(e){}
+    return await firebaseSet(key, value);
+  }
   if(CLOUD_AVAILABLE){
     try{ return await window.storage.set(key, value, true); }catch(e){ return null; }
   }
@@ -558,6 +635,10 @@ async function rawStoreSet(key, value){
   try{ localStorage.setItem(key, value); return { key, value }; }catch(e){ return null; }
 }
 async function rawStoreDelete(key){
+  if(FIREBASE_READY){
+    try{ localStorage.removeItem(key); }catch(e){}
+    return await firebaseDelete(key);
+  }
   if(CLOUD_AVAILABLE){
     try{ return await window.storage.delete(key, true); }catch(e){ return null; }
   }
@@ -769,6 +850,7 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
   try{ await deviceStoreSet('device:shopCode', code); }catch(e){}
 
   state.activeCategory = state.categories[0] || 'အားလုံး';
+  startDebtRealtimeSync();
   setSyncStatus('ok');
   renderTopbar();
 
@@ -826,12 +908,33 @@ function setSyncStatus(s){
   if(s === 'syncing'){ dot.classList.add('syncing'); label.textContent = mode==='local' ? 'သိမ်းနေ…' : 'Syncing…'; }
   else if(s === 'err'){ dot.classList.add('err'); label.textContent = 'Sync error'; }
   else {
-    label.textContent = mode==='cloud' ? 'Synced' : mode==='google' ? 'Google Synced' : 'Device Only';
+    label.textContent = mode==='firebase' ? 'Live Sync' : mode==='cloud' ? 'Synced' : mode==='google' ? 'Google Synced' : 'Device Only';
   }
 }
 
 /* ---------------- onboarding ---------------- */
+/* Real-time debt sync: Firestore pushes any change made on another device
+   straight to this one, so the credit ledger is never stale. Only applied
+   while the person isn't mid-entry (no open sheet, empty cart) so it can't
+   yank data out from under them. */
+function startDebtRealtimeSync(){
+  if(!FIREBASE_READY || !state.shopCode) return;
+  if(__debtUnsub){ try{ __debtUnsub(); }catch(e){} __debtUnsub = null; }
+  try{
+    __debtUnsub = __fsdb.collection('shops').doc(state.shopCode)
+      .collection('data').doc(encodeURIComponent(skey('debtBooks:meta')))
+      .onSnapshot(async () => {
+        const overlay = document.getElementById('sheet-overlay');
+        if(overlay && overlay.classList.contains('show')) return;
+        if(state.cart.length > 0) return;
+        const fresh = await loadDebtBooksFromStorage();
+        if(fresh){ state.debtBooks = fresh; if(state.activeScreen==='settings') renderScreen(); }
+      }, () => {});
+  }catch(e){}
+}
+
 async function initApp(){
+  initFirebase();
   try{
     const existing = await deviceStoreGet('device:shopCode');
     if(existing){
@@ -2087,8 +2190,13 @@ function renderSettings(){
       <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="saveShopSettings()">သိမ်းမည်</button>
     </div>
 
-    <div class="section-title">${ syncMode()==='cloud' ? 'Cloud Sync' : syncMode()==='google' ? 'Google Cloud Sync' : 'ဒေတာသိမ်းဆည်းမှု' }</div>
+    <div class="section-title">${ syncMode()==='firebase' ? 'Firebase Realtime Sync' : syncMode()==='cloud' ? 'Cloud Sync' : syncMode()==='google' ? 'Google Cloud Sync' : 'ဒေတာသိမ်းဆည်းမှု' }</div>
     <div class="card">
+      ${ syncMode()==='firebase' ? `
+        <div class="si-sub" style="background:var(--primary-tint); color:var(--primary-dark); padding:10px; border-radius:var(--radius-sm); margin-bottom:12px; font-weight:600;">
+          ⚡ Firebase ဖြင့် Real-time Sync ချိတ်ဆက်ထားပါသည် — device များအကြား ချက်ချင်း sync ဖြစ်ပြီး internet ပြတ်နေချိန်မှာလည်း ဆက်ရောင်းနိုင်ပါသည်။
+        </div>
+      ` : '' }
       ${ syncMode()==='local' ? `
         <div class="si-sub" style="background:var(--danger-tint); color:var(--danger); padding:10px; border-radius:var(--radius-sm); margin-bottom:12px; font-weight:600;">
           ⚠️ ဒီ device ပေါ်မှာ "Local Only" mode နဲ့ အလုပ်လုပ်နေပါသည် — data ကို ဒီ browser ထဲမှာပဲ သိမ်းထားပြီး device တခြားနှင့် cloud sync မဖြစ်ပါ။
@@ -2110,8 +2218,11 @@ function renderSettings(){
       <div class="si-sub" style="margin-top:8px; text-align:center;">နောက်ဆုံး ${ syncMode()==='local' ? 'သိမ်းဆည်း' : 'sync' } − ${state.lastSyncAt ? state.lastSyncAt.toLocaleTimeString('my-MM') : '—'}</div>
 
       ${ syncMode() !== 'cloud' ? `
-        <button class="btn ${syncMode()==='google' ? 'btn-ghost' : 'btn-accent'} btn-block" style="margin-top:12px;" onclick="openGoogleSyncSetup()">
-          ${ syncMode()==='google' ? '⚙️ Google Sync ဆက်တင်' : '🔗 Google ဖြင့် Cloud Sync ချိတ်ဆက်ရန်' }
+        <button class="btn ${syncMode()==='firebase' ? 'btn-ghost' : 'btn-accent'} btn-block" style="margin-top:12px;" onclick="openFirebaseSetup()">
+          ${ syncMode()==='firebase' ? '⚙️ Firebase ဆက်တင်' : '⚡ Firebase ဖြင့် Real-time Sync ချိတ်ဆက်ရန် (အကြံပြု)' }
+        </button>
+        <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="openGoogleSyncSetup()">
+          ${ syncMode()==='google' ? '⚙️ Google Sheet Sync ဆက်တင်' : '🔗 Google Sheet ဖြင့် ချိတ်ဆက်ရန်' }
         </button>
       ` : '' }
     </div>
@@ -2120,6 +2231,7 @@ function renderSettings(){
     <div class="card">
       <div class="si-sub">${
         syncMode()==='cloud' ? `အခြားဖုန်း/ကွန်ပျူတာမှ ဒီ app ကိုဖွင့်ပြီး "ဆိုင်ကုဒ်ဖြင့်ချိတ်မည်" ကိုနှိပ်ကာ ကုဒ် <b>${state.shopCode}</b> ထည့်ပါ — ကုန်ပစ္စည်းနှင့် ရောင်းအားမှတ်တမ်းများ အလိုအလျောက် sync ဖြစ်ပါမည်။`
+        : syncMode()==='firebase' ? `အခြား device တွင် ဒီ app ကိုဖွင့်ပြီး Settings > Firebase ဆက်တင် ထဲ <b>တူညီသော Firebase config</b> ကို ထည့်ပါ — ပြီးရင် ဆိုင်ကုဒ် <b>${state.shopCode}</b> နှင့် join ရိုက်ထည့်ပါ။ ပြောင်းလဲမှုများ ချက်ချင်း sync ဖြစ်ပါမည်။`
         : syncMode()==='google' ? `အခြား device တွင် ဒီ app file ကို ဖွင့်ပြီး Settings > Google Sync ထဲ <b>တူညီသော Web App URL</b> ကို ထည့်ကာ ချိတ်ဆက်ပါ — ပြီးရင် ဆိုင်ကုဒ် <b>${state.shopCode}</b> နှင့် join ရိုက်ထည့်ပါ။`
         : `ဒီ device မှာတော့ Local Only mode ဖြစ်နေတဲ့အတွက် အခြား device တွင် ချိတ်ဆက်၍ မရသေးပါ။ အပေါ်က "Google ဖြင့် Cloud Sync ချိတ်ဆက်ရန်" ကိုနှိပ်ပြီး အခမဲ့ setup လုပ်နိုင်ပါသည် — ဒါမှမဟုတ် "Export & Backup" ဖြင့် backup file ကို အခြား device သို့ ကူးယူနိုင်ပါသည်။`
       }</div>
@@ -2512,6 +2624,98 @@ function showAppsScriptCodeManualCopy(){
   ta.value = APPS_SCRIPT_CODE;
   ta.focus();
   ta.select();
+}
+
+function openFirebaseSetup(){
+  const cfg = getFirebaseConfig();
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>⚡ Firebase Real-time Sync</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+
+    <div class="si-sub" style="line-height:1.8; margin-bottom:12px;">
+      <b>အဆင့် ၁ — Firebase project ဖွင့်ပါ</b><br>
+      1) <b>console.firebase.google.com</b> ကိုသွားပါ (Google account နဲ့ ဝင်ပါ)<br>
+      2) <b>"Create a project"</b> နှိပ်ပြီး project name (ဥပမာ - hasan-pos) ပေးပါ<br>
+      3) Google Analytics ကို <b>Disable</b> လုပ်လို့ရပါတယ် (မလိုအပ်ပါ)<br><br>
+
+      <b>အဆင့် ၂ — Firestore Database ဖွင့်ပါ</b><br>
+      1) ဘယ်ဘက် menu ထဲက <b>Build > Firestore Database</b> ကိုသွားပါ<br>
+      2) <b>"Create database"</b> နှိပ်ပါ<br>
+      3) Location ကို <b>asia-southeast1</b> (Singapore) ရွေးပါ — မြန်မာနဲ့ အနီးဆုံးမို့ မြန်ပါတယ်<br>
+      4) <b>"Start in test mode"</b> ရွေးပြီး Enable နှိပ်ပါ<br><br>
+
+      <b>အဆင့် ၃ — Web App ထည့်ပြီး config ယူပါ</b><br>
+      1) Project Overview ဘေးက <b>⚙️ > Project settings</b> ကိုသွားပါ<br>
+      2) အောက်ဆုံး "Your apps" မှာ <b>&lt;/&gt;</b> (Web) icon ကိုနှိပ်ပါ<br>
+      3) Nickname ပေးပြီး <b>Register app</b> နှိပ်ပါ<br>
+      4) ပေါ်လာတဲ့ code ထဲက <b>firebaseConfig = { ... }</b> ဆိုတဲ့ <b>{ }</b> အတွင်းက အပိုင်းအားလုံးကို copy ကူးပါ<br>
+      5) အောက်က box ထဲ ကူးထည့်ပြီး ချိတ်ဆက်ပါ
+    </div>
+
+    <label>Firebase Config (JSON)</label>
+    <textarea id="fb-config" rows="9" placeholder='{
+  "apiKey": "AIza...",
+  "authDomain": "hasan-pos.firebaseapp.com",
+  "projectId": "hasan-pos",
+  "storageBucket": "hasan-pos.appspot.com",
+  "messagingSenderId": "123...",
+  "appId": "1:123...:web:abc..."
+}' style="width:100%; box-sizing:border-box; font-family:monospace; font-size:11px;">${cfg ? escapeAttr(JSON.stringify(cfg, null, 2)) : ''}</textarea>
+
+    <div class="si-sub" style="margin-top:8px;">* config ထဲက <b>'</b> နဲ့ <b>"</b> ရောနေရင်လည်း အလိုအလျောက် ပြင်ပေးပါမည်</div>
+
+    <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="saveFirebaseConfig()">ချိတ်ဆက်ပြီး သိမ်းမည်</button>
+    ${ cfg ? `<button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="disconnectFirebase()">Firebase ဖြုတ်မည်</button>` : '' }
+
+    <div class="si-sub" style="margin-top:14px; line-height:1.7; background:var(--primary-tint); color:var(--primary-dark); padding:10px; border-radius:var(--radius-sm);">
+      <b>⚠️ အရေးကြီး — Test mode သက်တမ်း</b><br>
+      Test mode က ရက် ၃၀ ပြီးရင် ပိတ်သွားပါတယ်။ မပိတ်အောင် Firestore > <b>Rules</b> tab သွားပြီး အောက်က rule ကို ကူးထည့်ကာ Publish နှိပ်ပါ:<br>
+      <code style="display:block; background:#fff; padding:8px; border-radius:6px; margin-top:6px; font-size:10px; white-space:pre; overflow-x:auto;">rules_version = '2';
+service in cloud.firestore {
+  match /databases/{db}/documents {
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}</code>
+    </div>
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+}
+
+async function saveFirebaseConfig(){
+  let raw = document.getElementById('fb-config').value.trim();
+  if(!raw){ showToast('Firebase config ထည့်ပါ'); return; }
+  // Tolerate the exact shape people copy out of the Firebase console:
+  // a JS object literal with unquoted keys and single quotes.
+  let cfg = null;
+  try{
+    cfg = JSON.parse(raw);
+  }catch(e){
+    try{
+      const cleaned = raw
+        .replace(/^\s*(const|let|var)\s+\w+\s*=\s*/, '')
+        .replace(/;\s*$/, '')
+        .replace(/(['"])?([A-Za-z0-9_]+)(['"])?\s*:/g, '"$2":')
+        .replace(/'/g, '"')
+        .replace(/,\s*}/g, '}');
+      cfg = JSON.parse(cleaned);
+    }catch(e2){ cfg = null; }
+  }
+  if(!cfg || !cfg.projectId || !cfg.apiKey){
+    showToast('Config မှားနေပါသည် — apiKey နှင့် projectId ပါရပါမည်');
+    return;
+  }
+  setFirebaseConfigLocal(cfg);
+  showToast('Firebase ချိတ်ဆက်ပြီးပါပြီ! ပြန်စတင်နေသည်...');
+  setTimeout(() => location.reload(), 900);
+}
+
+async function disconnectFirebase(){
+  if(!confirm('Firebase ကို ဖြုတ်မှာသေချာပါသလား? (Cloud ထဲက data မပျောက်ပါ — ဒီ device ကပဲ ချိတ်ဆက်မှု ရပ်သွားမည်)')) return;
+  setFirebaseConfigLocal(null);
+  showToast('Firebase ဖြုတ်ပြီးပါပြီ — ပြန်စတင်နေသည်...');
+  setTimeout(() => location.reload(), 900);
 }
 
 function openGoogleSyncSetup(){
