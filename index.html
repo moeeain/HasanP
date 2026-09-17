@@ -9,8 +9,8 @@
 <noscript><link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-app-compat.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-app-compat.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-firestore-compat.js" defer></script>
 <style>
   :root{
     --primary:#0B4D3C;
@@ -1560,7 +1560,7 @@ async function processImport(){
 /* ============ POS / SALE ============ */
 function renderPOS(){
   const cats = state.categories;
-  const filtered = state.products.filter(p => state.activeCategory==='အားလုံး' || p.category === state.activeCategory);
+  const filtered = sortProductsByName(state.products.filter(p => state.activeCategory==='အားလုံး' || p.category === state.activeCategory));
   return `
     <div class="search-bar" style="margin-bottom:12px;">
       <span>🔍</span>
@@ -1575,6 +1575,13 @@ function renderPOS(){
   `;
 }
 function escapeAttr(s){ return String(s).replace(/'/g,"\\'"); }
+
+/* Sorts product names alphabetically the way a Myanmar reader expects
+   (က, ခ, ဂ ... order), while still sorting English/Latin names sensibly
+   too — used everywhere a product list is shown. */
+function sortProductsByName(list){
+  return [...list].sort((a, b) => a.name.localeCompare(b.name, 'my'));
+}
 
 function productCardHTML(p){
   const inCart = state.cart.find(c => c.id === p.id);
@@ -1592,10 +1599,10 @@ function productCardHTML(p){
 
 function filterPOSSearch(q){
   q = q.trim().toLowerCase();
-  const filtered = state.products.filter(p =>
+  const filtered = sortProductsByName(state.products.filter(p =>
     (state.activeCategory==='အားလုံး' || p.category === state.activeCategory) &&
     p.name.toLowerCase().includes(q)
-  );
+  ));
   document.getElementById('pos-grid').innerHTML = filtered.length===0
     ? emptyState('🔍','ရှာမတွေ့ပါ','အမည်တခြားစမ်းကြည့်ပါ')
     : filtered.map(p => productCardHTML(p)).join('');
@@ -1886,14 +1893,12 @@ async function checkout(){
     }
   }
 
-  setSyncStatus('syncing');
-  await Promise.all([
-    saveSaleRecord(sale),
-    saveProductRecords(changedProducts),
-    debtBookToSave ? saveDebtBookRecord(debtBookToSave) : Promise.resolve(),
-  ]);
-  setSyncStatus('ok');
-
+  // Show the receipt immediately — the sale is already fully recorded in
+  // local state, so the person shouldn't have to wait on a network round
+  // trip just to see the voucher. The actual cloud save happens right
+  // after, in the background; if it fails, a toast says so and the
+  // background auto-sync will retry shortly.
+  const saleId = sale.id;
   state.cart = [];
   state.discountPct = 0;
   state.checkoutCustomerName = '';
@@ -1903,7 +1908,19 @@ async function checkout(){
   state.paymentType = 'cash';
   closeSheet();
   renderScreen();
-  openReceipt(sale.id, true);
+  openReceipt(saleId, true);
+
+  setSyncStatus('syncing');
+  Promise.all([
+    saveSaleRecord(sale),
+    saveProductRecords(changedProducts),
+    debtBookToSave ? saveDebtBookRecord(debtBookToSave) : Promise.resolve(),
+  ]).then(() => {
+    setSyncStatus('ok');
+  }).catch(() => {
+    setSyncStatus('err');
+    showToast('⚠️ Cloud သို့ သိမ်းဆည်းရာတွင် အနည်းငယ် ကြန့်ကြာနေသည် — sync အလိုအလျောက် ပြန်စမ်းပါမည်');
+  });
 }
 
 /* ============ RECEIPT ============ */
@@ -1962,7 +1979,7 @@ function printReceipt(){
 /* ============ PRODUCTS ============ */
 let productSearchQ = '';
 function renderProducts(){
-  const list = state.products.filter(p => p.name.toLowerCase().includes(productSearchQ.toLowerCase()));
+  const list = sortProductsByName(state.products.filter(p => p.name.toLowerCase().includes(productSearchQ.toLowerCase())));
   return `
     <div class="search-bar" style="margin-bottom:10px;">
       <span>🔍</span>
@@ -1978,7 +1995,7 @@ function renderProducts(){
 }
 function onProductSearch(v){
   productSearchQ = v;
-  const list = state.products.filter(p => p.name.toLowerCase().includes(v.toLowerCase()));
+  const list = sortProductsByName(state.products.filter(p => p.name.toLowerCase().includes(v.toLowerCase())));
   document.getElementById('product-list').innerHTML = list.length===0
     ? emptyState('🔍','ရှာမတွေ့ပါ','')
     : list.map(p => productListItemHTML(p)).join('');
@@ -2160,12 +2177,18 @@ async function saveProductForm(id){
     state.products.push(savedProduct);
   }
 
-  setSyncStatus('syncing');
-  await Promise.all([saveProductRecords([savedProduct]), saveCategories(), costUnitsChanged ? saveCostUnits() : Promise.resolve(), unitOptionsChanged ? saveUnitOptions() : Promise.resolve()]);
-  setSyncStatus('ok');
   closeSheet();
   renderScreen();
   showToast(id ? 'ပြင်ဆင်ပြီးပါပြီ' : 'ထည့်သွင်းပြီးပါပြီ');
+
+  setSyncStatus('syncing');
+  Promise.all([
+    saveProductRecords([savedProduct]),
+    saveCategories(),
+    costUnitsChanged ? saveCostUnits() : Promise.resolve(),
+    unitOptionsChanged ? saveUnitOptions() : Promise.resolve(),
+  ]).then(() => setSyncStatus('ok'))
+    .catch(() => { setSyncStatus('err'); showToast('⚠️ Cloud သို့ သိမ်းဆည်းရာတွင် ကြန့်ကြာနေသည်'); });
 }
 
 async function deleteProduct(id){
