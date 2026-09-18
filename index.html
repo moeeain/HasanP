@@ -50,7 +50,8 @@
   }
   @media (min-width:481px){
     body{ background:#EDE8DC; padding:24px 0; }
-    #app-shell{ min-height:calc(100vh - 48px); border-radius:28px; overflow:hidden; }
+    #app-shell{ max-width:min(94vw, 1100px); min-height:calc(100vh - 48px); border-radius:28px; overflow:hidden; }
+    .sheet{ max-width:min(94vw, 1100px); }
   }
 
   /* ---------- Header ---------- */
@@ -169,7 +170,7 @@
   .chip.active{ background:var(--primary); color:#fff; border-color:var(--primary); }
 
   /* ---------- Product grid (POS) ---------- */
-  .product-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .product-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:10px; }
   .product-card{
     background:var(--surface); border:1.5px solid var(--border); border-radius:var(--radius-md);
     padding:12px; cursor:pointer; text-align:left; position:relative; display:flex; flex-direction:column; gap:6px;
