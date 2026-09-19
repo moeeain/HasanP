@@ -176,7 +176,7 @@
     padding:12px; cursor:pointer; text-align:left; position:relative; display:flex; flex-direction:column; gap:6px;
   }
   .product-card:active{ transform:scale(0.98); }
-  .product-card .p-icon{ font-size:26px; }
+  .product-card .p-icon{ font-size:26px; width:48px; height:48px; border-radius:10px; overflow:hidden; background:var(--primary-tint); display:flex; align-items:center; justify-content:center; }
   .product-card .p-name{ font-size:13.5px; font-weight:700; line-height:1.25; min-height:34px; }
   .product-card .p-price{ font-size:14px; font-weight:800; color:var(--primary-dark); }
   .product-card .p-stock{ font-size:11px; color:var(--text-muted); }
@@ -468,6 +468,8 @@ let state = {
   costUnits: ['ပိသာ','ပြည်','အိတ်'],
   unitOptions: ['ခု','ပုလင်း','ထုပ်','ပါကင်','ဒါဇင်','ပိသာ','ပြည်','အိတ်'],
   debtBooks: [],      // {id, name, customers:[{id,name,phone,entries:[{id,date,amount,note,type}]}]}
+  expenses: [],       // {id, date, amount, category, note}
+  expenseCategories: ['ငှားရမ်းခ','လျှပ်စစ်','ဝန်ထမ်းလစာ','ကုန်ပစ္စည်းဝယ်ယူခ','သယ်ယူပို့ဆောင်ခ','အခြား'],
   cart: [],           // {id, name, price, qty, icon, unit}
   activeCategory: 'အားလုံး',
   activeScreen: 'dashboard',
@@ -833,6 +835,28 @@ async function loadDebtBooksFromStorage(){
   return await loadChunkedList('debtBooks', null);
 }
 
+async function saveExpenseRecord(expense){
+  if(FIREBASE_READY){ await firebaseSaveRecord('expenses', expense.id, expense); return; }
+  await saveChunkedList('expenses', state.expenses);
+}
+async function deleteExpenseRecord(id){
+  if(FIREBASE_READY){ await firebaseDeleteRecord('expenses', id); return; }
+  await saveChunkedList('expenses', state.expenses);
+}
+async function loadExpensesFromStorage(){
+  if(FIREBASE_READY){
+    const list = await firebaseLoadCollection('expenses');
+    if(list && list.length) return list;
+    const legacy = await loadChunkedList('expenses', null);
+    if(legacy && legacy.length) await Promise.all(legacy.map(x => firebaseSaveRecord('expenses', x.id, x)));
+    return legacy;
+  }
+  return await loadChunkedList('expenses', null);
+}
+async function saveExpenseCategories(){
+  await rawStoreSet(skey('expenseCategories'), JSON.stringify(state.expenseCategories));
+}
+
 async function saveSales(){
   if(FIREBASE_READY){
     await Promise.all(state.sales.map(s => firebaseSaveRecord('sales', s.id, s)));
@@ -923,7 +947,7 @@ function safeParse(raw, fallback){
 async function loadShop(code, {seedIfEmpty=false} = {}){
   state.shopCode = code;
   setSyncStatus('syncing');
-  const [pList, sList, setRaw, catRaw, cuRaw, stRaw, dbList, uoRaw] = await Promise.all([
+  const [pList, sList, setRaw, catRaw, cuRaw, stRaw, dbList, uoRaw, exList, ecRaw] = await Promise.all([
     loadProductsFromStorage(),
     loadSalesFromStorage(),
     storageGetSafe(skey('settings')),
@@ -932,6 +956,8 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
     storageGetSafe(skey('staff')),
     loadDebtBooksFromStorage(),
     storageGetSafe(skey('unitOptions')),
+    loadExpensesFromStorage(),
+    storageGetSafe(skey('expenseCategories')),
   ]);
 
   state.products = pList || [];
@@ -943,6 +969,8 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
   state.settings = safeParse(setRaw, { currency:'Ks', shopName:'ဦးတင်အောင် ကုန်စုံဆိုင်', address:'အမှတ်(၁၂၇)၊ အနောက်မြို့ပတ်လမ်း၊ တိုက်ကြီးမြို့', shopPhones:'09 973581254, 09 5394454', homePhones:'09 5394168, 09 979095560, 09 783619223' });
   state.staff = safeParse(stRaw, []);
   state.debtBooks = dbList || [];
+  state.expenses = exList || [];
+  state.expenseCategories = safeParse(ecRaw, ['ငှားရမ်းခ','လျှပ်စစ်','ဝန်ထမ်းလစာ','ကုန်ပစ္စည်းဝယ်ယူခ','သယ်ယူပို့ဆောင်ခ','အခြား']);
 
   if(!pList && seedIfEmpty){
     seedDemoData();
@@ -976,7 +1004,7 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
 async function manualSync(silent){
   if(!state.shopCode) return;
   setSyncStatus('syncing');
-  const [pList, sList, setRaw, catRaw, cuRaw, stRaw, dbList, uoRaw] = await Promise.all([
+  const [pList, sList, setRaw, catRaw, cuRaw, stRaw, dbList, uoRaw, exList, ecRaw] = await Promise.all([
     loadProductsFromStorage(),
     loadSalesFromStorage(),
     storageGetSafe(skey('settings')),
@@ -985,6 +1013,8 @@ async function manualSync(silent){
     storageGetSafe(skey('staff')),
     loadDebtBooksFromStorage(),
     storageGetSafe(skey('unitOptions')),
+    loadExpensesFromStorage(),
+    storageGetSafe(skey('expenseCategories')),
   ]);
   if(pList){ state.products = pList; migrateLegacyCostFields(); }
   if(sList) state.sales = sList;
@@ -994,6 +1024,8 @@ async function manualSync(silent){
   if(uoRaw) state.unitOptions = safeParse(uoRaw, state.unitOptions);
   if(stRaw) state.staff = safeParse(stRaw, state.staff);
   if(dbList) state.debtBooks = dbList;
+  if(exList) state.expenses = exList;
+  if(ecRaw) state.expenseCategories = safeParse(ecRaw, state.expenseCategories);
   await runArchiveCheck();
   setSyncStatus('ok');
   renderTopbar();
@@ -1287,6 +1319,9 @@ function renderDashboard(){
 
   const recent = [...state.sales].sort((a,b)=>b.time-a.time).slice(0,5);
 
+  const debtTotal = state.debtBooks.reduce((sum,b) => sum + b.customers.reduce((s,c) => s + debtBalance(c), 0), 0);
+  const todayExpense = state.expenses.filter(e => isSameDay(e.date, today)).reduce((a,e)=>a+e.amount,0);
+
   return `
     <div class="hero-card">
       <div class="hero-label">ယနေ့ ရောင်းအား</div>
@@ -1296,6 +1331,11 @@ function renderDashboard(){
         <div><b>${money(avg)}</b>ပျမ်းမျှ</div>
         <div><b>${topItem ? topItem[0] : '—'}</b>အရောင်းရဆုံး</div>
       </div>
+    </div>
+
+    <div class="field-row" style="margin:14px 0;">
+      <button class="btn btn-outline" onclick="openDebtBooksList()">📒 အကြွေးစာရင်း${debtTotal>0 ? `<br><span style="font-size:11px; font-weight:700;">${money(debtTotal)}</span>` : ''}</button>
+      <button class="btn btn-outline" onclick="openExpenseSheet()">💸 ကုန်ကျစရိတ်${todayExpense>0 ? `<br><span style="font-size:11px; font-weight:700;">ယနေ့ ${money(todayExpense)}</span>` : ''}</button>
     </div>
 
     <div class="stat-grid">
@@ -1308,7 +1348,7 @@ function renderDashboard(){
       <div class="card">
         ${ lowStock.slice(0,4).map(p => `
           <div style="display:flex; justify-content:space-between; padding:6px 0; font-size:13px;">
-            <span>${p.icon} ${p.name}</span>
+            <span>${p.name}</span>
             <span class="low-badge">${p.stock} လက်ကျန်</span>
           </div>
         `).join('') }
@@ -1459,14 +1499,13 @@ function parseImportCSV(text){
     const category = (cells[1]||'').trim() || 'အထွေထွေ';
     const price = Number(String(cells[2]||'0').replace(/[,\s]/g,'')) || 0;
     const stock = Number(String(cells[3]||'0').replace(/[,\s]/g,'')) || 0;
-    const icon = (cells[4]||'').trim();
     // optional extra columns (all backward-compatible — older 4/5-column CSVs still work)
     const priceWholesale = Number(String(cells[5]||'0').replace(/[,\s]/g,'')) || 0;
     const priceVIP = Number(String(cells[6]||'0').replace(/[,\s]/g,'')) || 0;
     const costUnit = (cells[7]||'').trim();
     const costValue = Number(String(cells[8]||'0').replace(/[,\s]/g,'')) || 0;
     const unit = (cells[9]||'').trim();
-    items.push({ name, category, price, stock, icon: ICONS.includes(icon) ? icon : '', priceWholesale, priceVIP, costUnit, costValue, unit });
+    items.push({ name, category, price, stock, priceWholesale, priceVIP, costUnit, costValue, unit });
   }
   return items;
 }
@@ -1536,7 +1575,6 @@ async function processImport(){
       existing.category = it.category;
       existing.price = it.price;
       existing.stock = it.stock;
-      if(it.icon) existing.icon = it.icon;
       if(it.priceWholesale) existing.priceWholesale = it.priceWholesale;
       if(it.priceVIP) existing.priceVIP = it.priceVIP;
       if(it.costUnit) existing.costUnit = it.costUnit;
@@ -1546,7 +1584,6 @@ async function processImport(){
     } else {
       state.products.push({
         id: uid(), name: it.name, category: it.category, price: it.price, stock: it.stock,
-        icon: it.icon || ICONS[Math.floor(Math.random()*ICONS.length)],
         priceWholesale: it.priceWholesale, priceVIP: it.priceVIP,
         costUnit: it.costUnit, costValue: it.costValue, unit: it.unit || 'ခု',
       });
@@ -1594,7 +1631,7 @@ function productCardHTML(p){
   return `
     <div class="product-card ${out?'out':''}" onclick="addToCart('${p.id}')">
       ${ inCart ? `<div class="qty-badge">${inCart.qty}</div>` : '' }
-      <div class="p-icon">${p.icon || '🛒'}</div>
+      <div class="p-icon">${p.photo ? `<img src="${p.photo}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">` : '📦'}</div>
       <div class="p-name">${p.name}</div>
       <div class="p-price">${money(p.price)}</div>
       <div class="p-stock ${p.stock<=LOW_STOCK_THRESHOLD?'low':''}">${out?'ကုန်သွားပြီ':'လက်ကျန် '+p.stock+' '+(p.unit||'')}</div>
@@ -1626,7 +1663,7 @@ function addToCart(id){
     if(line.qty >= p.stock){ showToast('ကုန်ပစ္စည်း လက်ကျန်မလုံလောက်ပါ'); return; }
     line.qty++;
   } else {
-    state.cart.push({ id:p.id, name:p.name, price:p.price, qty:1, icon:p.icon, tier:'retail', unit:p.unit||'ခု' });
+    state.cart.push({ id:p.id, name:p.name, price:p.price, qty:1, photo:p.photo, tier:'retail', unit:p.unit||'ခု' });
   }
   renderScreen();
 }
@@ -1704,7 +1741,7 @@ function renderCartSheetContent(){
         const hasTiers = p && (p.priceWholesale || p.priceVIP);
         return `
         <div class="cart-line">
-          <div class="cl-icon">${c.icon||'🛒'}</div>
+          <div class="cl-icon">${c.photo ? `<img src="${c.photo}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">` : '📦'}</div>
           <div class="cl-info">
             <div class="cl-name">${c.name}</div>
             <div class="cl-price">${money(c.price)}</div>
@@ -2009,7 +2046,7 @@ function onProductSearch(v){
 function productListItemHTML(p){
   return `
     <div class="plist-item">
-      <div class="p-icon">${p.icon||'🛒'}</div>
+      <div class="p-icon">${p.photo ? `<img src="${p.photo}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;">` : '📦'}</div>
       <div class="p-info">
         <div class="name">${p.name} ${p.stock<=LOW_STOCK_THRESHOLD ? '<span class="low-badge">နည်းနေသည်</span>' : ''}</div>
         <div class="meta">${p.category} · လက်လီ ${money(p.price)}${p.priceWholesale ? ` · လက်ကား ${money(p.priceWholesale)}` : ''}${p.priceVIP ? ` · VIP ${money(p.priceVIP)}` : ''} · လက်ကျန် ${p.stock} ${p.unit||''}</div>
@@ -2029,10 +2066,18 @@ function openProductForm(id){
     <div class="sheet-handle"></div>
     <div class="sheet-header"><h3>${editing ? 'ကုန်ပစ္စည်း ပြင်ဆင်မည်' : 'ကုန်ပစ္စည်း အသစ်ထည့်မည်'}</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
 
-    <label>အိုင်ကွန်</label>
-    <div class="chip-row" id="icon-row">
-      ${ICONS.map(ic => `<div class="chip ${ (editing?editing.icon:ICONS[0])===ic ? 'active':''}" data-icon="${ic}" onclick="selectIcon('${ic}')">${ic}</div>`).join('')}
+    <label>ကုန်ပစ္စည်း ဓာတ်ပုံ</label>
+    <div style="display:flex; align-items:center; gap:12px; margin:6px 0 4px;">
+      <div id="pf-photo-preview" style="width:64px; height:64px; border-radius:14px; overflow:hidden; background:var(--bg); display:flex; align-items:center; justify-content:center; font-size:28px; flex-shrink:0; border:1px solid var(--border);">
+        ${editing && editing.photo ? `<img src="${editing.photo}" style="width:100%; height:100%; object-fit:cover;">` : '📦'}
+      </div>
+      <div style="display:flex; flex-direction:column; gap:6px; flex:1;">
+        <button type="button" class="btn btn-outline" onclick="document.getElementById('pf-photo-camera').click()">📷 ဓာတ်ပုံရိုက်မည်</button>
+        <button type="button" class="btn btn-outline" onclick="document.getElementById('pf-photo-file').click()">🖼️ ဖိုင်ရွေးမည်</button>
+      </div>
     </div>
+    <input type="file" id="pf-photo-camera" accept="image/*" capture="environment" style="display:none;" onchange="handleProductPhoto(this)">
+    <input type="file" id="pf-photo-file" accept="image/*" style="display:none;" onchange="handleProductPhoto(this)">
 
     <label>ကုန်ပစ္စည်းအမည်</label>
     <input type="text" id="pf-name" value="${editing ? escapeAttr(editing.name) : ''}" placeholder="ဥပမာ - ကော်ဖီမစ်">
@@ -2094,7 +2139,7 @@ function openProductForm(id){
 
     <button class="btn btn-primary btn-block" style="margin-top:18px;" onclick="saveProductForm(${editing ? `'${editing.id}'` : 'null'})">${editing?'သိမ်းမည်':'ထည့်သွင်းမည်'}</button>
   `;
-  window.__selectedIcon = editing ? editing.icon : ICONS[0];
+  window.__pendingPhoto = editing ? (editing.photo || null) : null;
   document.getElementById('pf-category').addEventListener('change', function(){
     document.getElementById('pf-newcat').style.display = this.value === '__new__' ? 'block' : 'none';
   });
@@ -2133,9 +2178,33 @@ function updateProfitPreview(){
     return `<div>${label} အမြတ်: <b style="color:${color}">${money(profit)}</b></div>`;
   }).join('') || 'ရောင်းဈေး ထည့်ထားရင် အမြတ် အလိုအလျောက် တွက်ပေးပါမည်';
 }
-function selectIcon(ic){
-  window.__selectedIcon = ic;
-  document.querySelectorAll('#icon-row .chip').forEach(c => c.classList.toggle('active', c.dataset.icon === ic));
+/* Reads the chosen/captured photo, downsizes it on a canvas (long edge
+   capped at 300px, JPEG ~70% quality) and keeps it as a small base64 data
+   URL — a phone photo straight off the camera can be several MB, which
+   would blow well past Firestore's 1MB-per-document limit and slow every
+   product list load back down to the crawl we just fixed. */
+function handleProductPhoto(input){
+  const file = input.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 300;
+      let w = img.width, h = img.height;
+      if(w > h){ if(w > MAX){ h = Math.round(h * MAX/w); w = MAX; } }
+      else { if(h > MAX){ w = Math.round(w * MAX/h); h = MAX; } }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+      window.__pendingPhoto = dataUrl;
+      const preview = document.getElementById('pf-photo-preview');
+      if(preview) preview.innerHTML = `<img src="${dataUrl}" style="width:100%; height:100%; object-fit:cover;">`;
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
 }
 
 async function saveProductForm(id){
@@ -2171,14 +2240,14 @@ async function saveProductForm(id){
     if(!state.unitOptions.includes(unit)){ state.unitOptions.push(unit); unitOptionsChanged = true; }
   }
 
-  const extra = { priceWholesale, priceVIP, costUnit, costValue, unit };
+  const extra = { priceWholesale, priceVIP, costUnit, costValue, unit, photo: window.__pendingPhoto || null };
   let savedProduct;
   if(id){
     const p = state.products.find(x => x.id === id);
-    Object.assign(p, { name, category, price, stock, icon: window.__selectedIcon }, extra);
+    Object.assign(p, { name, category, price, stock }, extra);
     savedProduct = p;
   } else {
-    savedProduct = Object.assign({ id: uid(), name, category, price, stock, icon: window.__selectedIcon }, extra);
+    savedProduct = Object.assign({ id: uid(), name, category, price, stock }, extra);
     state.products.push(savedProduct);
   }
 
@@ -2231,6 +2300,11 @@ function renderReports(){
   const weekProfit = profitFromSales(weekSales);
   const allTimeProfit = profitFromSales(state.sales);
 
+  const weekExpense = state.expenses.filter(e => days.some(d => isSameDay(e.date, d))).reduce((a,e)=>a+e.amount,0);
+  const allTimeExpense = state.expenses.reduce((a,e)=>a+e.amount,0);
+  const weekNet = weekProfit.total - weekExpense;
+  const allTimeNet = allTimeProfit.total - allTimeExpense;
+
   return `
     <div class="stat-grid" style="margin-bottom:16px;">
       <div class="stat-card"><div class="label">လွန်ခဲ့သော ၇ ရက် ရောင်းအား</div><div class="value">${money(weekTotal)}</div></div>
@@ -2242,6 +2316,17 @@ function renderReports(){
       <div class="stat-card accent"><div class="label">စုစုပေါင်း အမြတ် (အားလုံး)</div><div class="value">${money(allTimeProfit.total)}</div></div>
     </div>
     ${ allTimeProfit.unknownCount>0 ? `<div class="si-sub" style="margin-bottom:16px;">* ကုန်ပစ္စည်း ${allTimeProfit.unknownCount} ခု အတွက် ဝယ်ဈေး မထည့်ရသေးလို့ အမြတ်တွင် ထည့်မတွက်ရသေးပါ — ကုန်ပစ္စည်း ပြင်ဆင်ရာမှာ ဝယ်ဈေး ဖြည့်ပေးပါ</div>` : '' }
+
+    <div class="section-title">ကုန်ကျစရိတ်နှင့် အသားတင်အမြတ်</div>
+    <div class="stat-grid" style="margin-bottom:16px;">
+      <div class="stat-card"><div class="label">လွန်ခဲ့သော ၇ ရက် ကုန်ကျစရိတ်</div><div class="value">${money(weekExpense)}</div></div>
+      <div class="stat-card accent"><div class="label">စုစုပေါင်း ကုန်ကျစရိတ်</div><div class="value">${money(allTimeExpense)}</div></div>
+    </div>
+    <div class="stat-grid" style="margin-bottom:16px;">
+      <div class="stat-card"><div class="label">အသားတင်အမြတ် (၇ ရက်)</div><div class="value">${money(weekNet)}</div></div>
+      <div class="stat-card accent"><div class="label">အသားတင်အမြတ် (အားလုံး)</div><div class="value">${money(allTimeNet)}</div></div>
+    </div>
+    <div class="si-sub" style="margin-bottom:16px;">အသားတင်အမြတ် = ကုန်ပစ္စည်း အမြတ် − ကုန်ကျစရိတ် (ဆိုင်ငှားခ၊ လျှပ်စစ်၊ လစာစသည်)</div>
 
     <div class="section-title">နေ့စဉ် ရောင်းအား (၇ ရက်)</div>
     <div class="card"><canvas id="salesChart" height="160"></canvas></div>
@@ -2393,30 +2478,6 @@ function renderSettings(){
       </div>
       <button class="btn btn-ghost btn-block" style="margin-top:12px;" onclick="openStaffForm()">+ ဝန်ထမ်းအသစ်ထည့်မည်</button>
       ${ state.staff.length>0 ? `<button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="lockNow()">ယခုပင် Lock လုပ်မည်</button>` : '' }
-    </div>
-
-    <div class="section-title">အကြွေးစာရင်းစာအုပ်များ</div>
-    <div class="card">
-      <div class="si-sub" style="margin-bottom:10px;">အကြွေးဝယ်သည့် ဖောက်သည်များကို စာအုပ်အလိုက် ခွဲခြားမှတ်တမ်းတင်နိုင်ပါသည် — POS ရောင်းချချိန် "အကြွေး" ရွေးလိုက်ရင် ဒီစာအုပ်များထဲက ဖောက်သည်စာရင်းကို ရွေးချယ်နိုင်ပါမည်။</div>
-      <div id="debtbook-list">
-        ${ state.debtBooks.length===0 ? `<div class="si-sub">အကြွေးစာရင်းစာအုပ် မရှိသေးပါ</div>` :
-          state.debtBooks.map(b => {
-            const total = b.customers.reduce((sum,c) => sum + debtBalance(c), 0);
-            return `
-            <div class="staff-row" style="cursor:pointer;" onclick="openDebtBookDetail('${b.id}')">
-              <div class="sr-avatar">📒</div>
-              <div class="sr-info">
-                <div class="sr-name">${escapeAttr(b.name)}</div>
-                <div class="sr-pin">ဖောက်သည် ${b.customers.length} ဦး · ကျန်ငွေ ${money(total)}</div>
-              </div>
-              <div class="p-actions">
-                <div class="icon-btn danger" onclick="event.stopPropagation(); deleteDebtBook('${b.id}')">🗑</div>
-              </div>
-            </div>
-          `; }).join('') }
-      </div>
-      <button class="btn btn-ghost btn-block" style="margin-top:12px;" onclick="createDebtBookPrompt()">+ အကြွေးစာရင်းစာအုပ် အသစ်ဖွင့်မည်</button>
-      ${ state.debtBooks.length>0 ? `<button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="exportDebtBooksXLSX()">📊 Excel (.xlsx) အဖြစ် Backup ယူမည်</button>` : '' }
     </div>
 
     <div class="section-title">ဒေတာ Export & Backup</div>
@@ -2588,6 +2649,121 @@ function exportDebtBooksXLSX(){
   showToast('အကြွေးစာရင်း Excel ဖိုင် Export ပြီးပါပြီ');
 }
 
+function openExpenseSheet(){
+  const sorted = [...state.expenses].sort((a,b) => b.date - a.date);
+  const total = state.expenses.reduce((s,e) => s + e.amount, 0);
+  const todayTotal = state.expenses.filter(e => isSameDay(e.date, new Date())).reduce((s,e) => s + e.amount, 0);
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>💸 ကုန်ကျစရိတ်</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+
+    <div class="stat-grid" style="margin-bottom:14px;">
+      <div class="stat-card"><div class="label">ယနေ့ ကုန်ကျစရိတ်</div><div class="value">${money(todayTotal)}</div></div>
+      <div class="stat-card accent"><div class="label">စုစုပေါင်း</div><div class="value">${money(total)}</div></div>
+    </div>
+
+    <label>ပမာဏ (${state.settings.currency || 'Ks'})</label>
+    <input type="number" id="ex-amount" placeholder="0">
+
+    <label>အမျိုးအစား</label>
+    <select id="ex-category">
+      ${state.expenseCategories.map(c => `<option>${c}</option>`).join('')}
+      <option value="__new__">+ အမျိုးအစားအသစ်</option>
+    </select>
+    <input type="text" id="ex-newcat" placeholder="အမျိုးအစားအသစ် အမည်" style="display:none; margin-top:8px;">
+
+    <label>မှတ်ချက် (ရွေးချယ်ခွင့်)</label>
+    <input type="text" id="ex-note" placeholder="ဥပမာ - ဇန်နဝါရီလ ဆိုင်ခန်းငှား">
+
+    <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="addExpense()">+ ထည့်မည်</button>
+
+    <div class="section-title" style="margin-top:18px;">မှတ်တမ်း</div>
+    <div class="card">
+      ${ sorted.length===0 ? emptyState('💸','ကုန်ကျစရိတ် မှတ်တမ်း မရှိသေးပါ','') :
+        sorted.slice(0,30).map(e => `
+          <div class="staff-row">
+            <div class="sr-avatar">💸</div>
+            <div class="sr-info">
+              <div class="sr-name">${escapeAttr(e.category)}${e.note ? ' · '+escapeAttr(e.note) : ''}</div>
+              <div class="sr-pin">${new Date(e.date).toLocaleDateString('my-MM')} · ${money(e.amount)}</div>
+            </div>
+            <div class="p-actions">
+              <div class="icon-btn danger" onclick="deleteExpense('${e.id}')">🗑</div>
+            </div>
+          </div>
+        `).join('') }
+    </div>
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+  document.getElementById('ex-category').addEventListener('change', function(){
+    document.getElementById('ex-newcat').style.display = this.value === '__new__' ? 'block' : 'none';
+  });
+}
+
+async function addExpense(){
+  const amount = Number(document.getElementById('ex-amount').value) || 0;
+  let category = document.getElementById('ex-category').value;
+  const newCat = document.getElementById('ex-newcat').value.trim();
+  const note = document.getElementById('ex-note').value.trim();
+
+  if(!amount || amount <= 0){ showToast('ပမာဏ ထည့်ပါ'); return; }
+  let catChanged = false;
+  if(category === '__new__'){
+    if(!newCat){ showToast('အမျိုးအစားအမည် ထည့်ပါ'); return; }
+    category = newCat;
+    if(!state.expenseCategories.includes(category)){ state.expenseCategories.push(category); catChanged = true; }
+  }
+
+  const expense = { id: uid(), date: Date.now(), amount, category, note };
+  state.expenses.push(expense);
+
+  openExpenseSheet(); // optimistic UI — refresh immediately, save in background
+  showToast('ကုန်ကျစရိတ် မှတ်တမ်းတင်ပြီးပါပြီ');
+
+  setSyncStatus('syncing');
+  Promise.all([saveExpenseRecord(expense), catChanged ? saveExpenseCategories() : Promise.resolve()])
+    .then(() => setSyncStatus('ok'))
+    .catch(() => { setSyncStatus('err'); showToast('⚠️ Cloud သို့ သိမ်းဆည်းရာတွင် ကြန့်ကြာနေသည်'); });
+}
+
+async function deleteExpense(id){
+  if(!confirm('ဒီကုန်ကျစရိတ် မှတ်တမ်းကို ဖျက်မှာသေချာပါသလား?')) return;
+  state.expenses = state.expenses.filter(e => e.id !== id);
+  openExpenseSheet();
+  setSyncStatus('syncing');
+  await deleteExpenseRecord(id);
+  setSyncStatus('ok');
+  showToast('ဖျက်ပြီးပါပြီ');
+}
+
+function openDebtBooksList(){
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>📒 အကြွေးစာရင်းစာအုပ်များ</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div class="si-sub" style="margin-bottom:10px;">အကြွေးဝယ်သည့် ဖောက်သည်များကို စာအုပ်အလိုက် ခွဲခြားမှတ်တမ်းတင်နိုင်ပါသည် — POS ရောင်းချချိန် "အကြွေး" ရွေးလိုက်ရင် ဒီစာအုပ်များထဲက ဖောက်သည်စာရင်းကို ရွေးချယ်နိုင်ပါမည်။</div>
+    <div id="debtbook-list">
+      ${ state.debtBooks.length===0 ? `<div class="si-sub">အကြွေးစာရင်းစာအုပ် မရှိသေးပါ</div>` :
+        state.debtBooks.map(b => {
+          const total = b.customers.reduce((sum,c) => sum + debtBalance(c), 0);
+          return `
+          <div class="staff-row" style="cursor:pointer;" onclick="openDebtBookDetail('${b.id}')">
+            <div class="sr-avatar">📒</div>
+            <div class="sr-info">
+              <div class="sr-name">${escapeAttr(b.name)}</div>
+              <div class="sr-pin">ဖောက်သည် ${b.customers.length} ဦး · ကျန်ငွေ ${money(total)}</div>
+            </div>
+            <div class="p-actions">
+              <div class="icon-btn danger" onclick="event.stopPropagation(); deleteDebtBook('${b.id}')">🗑</div>
+            </div>
+          </div>
+        `; }).join('') }
+    </div>
+    <button class="btn btn-ghost btn-block" style="margin-top:12px;" onclick="createDebtBookPrompt()">+ အကြွေးစာရင်းစာအုပ် အသစ်ဖွင့်မည်</button>
+    ${ state.debtBooks.length>0 ? `<button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="exportDebtBooksXLSX()">📊 Excel (.xlsx) အဖြစ် Backup ယူမည်</button>` : '' }
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+}
+
 async function createDebtBookPrompt(){
   const name = (prompt('အကြွေးစာရင်းစာအုပ် အမည် ထည့်ပါ (ဥပမာ - ရွာသူကြီးလမ်း)') || '').trim();
   if(!name) return;
@@ -2597,7 +2773,7 @@ async function createDebtBookPrompt(){
   setSyncStatus('syncing');
   await saveDebtBookRecord(newBook);
   setSyncStatus('ok');
-  renderScreen();
+  openDebtBooksList();
   showToast('အကြွေးစာရင်းစာအုပ် အသစ် ဖွင့်ပြီးပါပြီ');
 }
 
@@ -2608,7 +2784,7 @@ async function deleteDebtBook(id){
   setSyncStatus('syncing');
   await deleteDebtBookRecord(id);
   setSyncStatus('ok');
-  renderScreen();
+  openDebtBooksList();
   showToast('စာအုပ် ဖျက်ပြီးပါပြီ');
 }
 
@@ -2633,12 +2809,9 @@ function openDebtBookDetail(bookId){
         `; }).join('') }
     </div>
     <button class="btn btn-ghost btn-block" style="margin-top:12px;" onclick="addDebtCustomerPrompt('${book.id}')">+ ဖောက်သည်အသစ်ထည့်မည်</button>
-    <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="openSettingsFromDebtBook()">← နောက်သို့</button>
+    <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="openDebtBooksList()">← နောက်သို့</button>
   `;
   document.getElementById('sheet-overlay').classList.add('show');
-}
-function openSettingsFromDebtBook(){
-  closeSheet();
 }
 
 async function addDebtCustomerPrompt(bookId){
