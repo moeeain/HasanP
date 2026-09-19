@@ -1249,10 +1249,32 @@ function tryUnlockPin(){
     updatePinDots();
   }
 }
+function currentStaffName(){
+  const s = state.staff.find(x => x.id === state.currentStaffId);
+  return s ? s.name : (state.staff.length === 0 ? '' : '—');
+}
+
 function lockNow(){
   if(state.staff.length === 0){ showToast('ပထမဆုံး Settings တွင် ဝန်ထမ်း ထည့်ပါ'); return; }
   state.currentStaffId = null;
   renderPinLock();
+}
+
+/* Guards a sensitive action (deleting a debt record, etc.) behind the
+   owner's PIN. If no staff are set up at all, there's only one person
+   using the app anyway, so the check is skipped entirely. If staff exist
+   but none is marked as owner, the currently logged-in staff's own PIN is
+   accepted (so a one-person "staff list" used only for sales attribution
+   doesn't lock the owner out of their own data). */
+function requireOwnerPin(actionLabel){
+  if(state.staff.length === 0) return true;
+  const owners = state.staff.filter(s => s.isOwner);
+  const checkAgainst = owners.length > 0 ? owners : state.staff;
+  const entered = prompt(`${actionLabel} — ဆိုင်ပိုင်ရှင် PIN ထည့်ပါ`);
+  if(entered === null) return false;
+  const match = checkAgainst.find(s => s.pin === entered.trim());
+  if(!match){ showToast('PIN မှားနေပါသည် — ခွင့်မပြုနိုင်ပါ'); return false; }
+  return true;
 }
 
 /* ---------------- navigation / render ---------------- */
@@ -1930,7 +1952,7 @@ async function checkout(){
     const book = state.debtBooks.find(b => b.id === debtBookId);
     const cust = book && book.customers.find(c => c.id === debtCustomerId);
     if(cust){
-      cust.entries.push({ id: uid(), date: Date.now(), amount: total, note: `အော်ဒါ #${sale.id.slice(-5).toUpperCase()}`, type:'debt', saleId: sale.id });
+      cust.entries.push({ id: uid(), date: Date.now(), amount: total, note: `အော်ဒါ #${sale.id.slice(-5).toUpperCase()}`, type:'debt', saleId: sale.id, recordedBy: currentStaffName() });
       debtBookToSave = book;
     }
   }
@@ -2571,6 +2593,10 @@ function openStaffForm(id){
     <input type="text" id="sf-name" value="${editing ? escapeAttr(editing.name) : ''}" placeholder="ဥပမာ - မမမ">
     <label>PIN (ဂဏန်း ၄ လုံး)</label>
     <input type="text" id="sf-pin" inputmode="numeric" maxlength="4" pattern="[0-9]*" value="${editing ? editing.pin : ''}" placeholder="ဥပမာ - 1234">
+    <label style="display:flex; align-items:center; gap:8px; margin-top:14px; cursor:pointer;">
+      <input type="checkbox" id="sf-owner" ${editing ? (editing.isOwner?'checked':'') : (state.staff.length===0?'checked':'')} style="width:18px; height:18px;">
+      <span>ဆိုင်ပိုင်ရှင် (Owner) — အကြွေးစာအုပ်/ဝန်ထမ်း ဖျက်ခြင်း စသည့် အရေးကြီးလုပ်ဆောင်ချက်များကို ခွင့်ပြုနိုင်သူ</span>
+    </label>
     <div class="pl-err" id="sf-err" style="color:var(--danger); font-size:12px; height:16px; margin-top:6px;"></div>
     <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="saveStaffForm(${editing ? `'${editing.id}'` : 'null'})">${editing?'သိမ်းမည်':'ထည့်သွင်းမည်'}</button>
   `;
@@ -2580,6 +2606,7 @@ function openStaffForm(id){
 async function saveStaffForm(id){
   const name = document.getElementById('sf-name').value.trim();
   const pin = document.getElementById('sf-pin').value.trim();
+  const isOwner = document.getElementById('sf-owner').checked;
   const errEl = document.getElementById('sf-err');
   if(!name){ errEl.textContent = 'ဝန်ထမ်းအမည် ထည့်ပါ'; return; }
   if(!/^\d{4}$/.test(pin)){ errEl.textContent = 'PIN သည် ဂဏန်း ၄ လုံး ဖြစ်ရပါမည်'; return; }
@@ -2588,9 +2615,9 @@ async function saveStaffForm(id){
 
   if(id){
     const s = state.staff.find(x => x.id === id);
-    Object.assign(s, { name, pin });
+    Object.assign(s, { name, pin, isOwner });
   } else {
-    state.staff.push({ id: uid(), name, pin });
+    state.staff.push({ id: uid(), name, pin, isOwner });
   }
   setSyncStatus('syncing');
   await saveStaff();
@@ -2685,7 +2712,7 @@ function openExpenseSheet(){
             <div class="sr-avatar">💸</div>
             <div class="sr-info">
               <div class="sr-name">${escapeAttr(e.category)}${e.note ? ' · '+escapeAttr(e.note) : ''}</div>
-              <div class="sr-pin">${new Date(e.date).toLocaleDateString('my-MM')} · ${money(e.amount)}</div>
+              <div class="sr-pin">${new Date(e.date).toLocaleDateString('my-MM')} · ${money(e.amount)}${e.recordedBy ? ' · '+escapeAttr(e.recordedBy) : ''}</div>
             </div>
             <div class="p-actions">
               <div class="icon-btn danger" onclick="deleteExpense('${e.id}')">🗑</div>
@@ -2714,7 +2741,7 @@ async function addExpense(){
     if(!state.expenseCategories.includes(category)){ state.expenseCategories.push(category); catChanged = true; }
   }
 
-  const expense = { id: uid(), date: Date.now(), amount, category, note };
+  const expense = { id: uid(), date: Date.now(), amount, category, note, recordedBy: currentStaffName() };
   state.expenses.push(expense);
 
   openExpenseSheet(); // optimistic UI — refresh immediately, save in background
@@ -2728,6 +2755,7 @@ async function addExpense(){
 
 async function deleteExpense(id){
   if(!confirm('ဒီကုန်ကျစရိတ် မှတ်တမ်းကို ဖျက်မှာသေချာပါသလား?')) return;
+  if(!requireOwnerPin('ကုန်ကျစရိတ် မှတ်တမ်း ဖျက်ခြင်း')) return;
   state.expenses = state.expenses.filter(e => e.id !== id);
   openExpenseSheet();
   setSyncStatus('syncing');
@@ -2779,6 +2807,7 @@ async function createDebtBookPrompt(){
 
 async function deleteDebtBook(id){
   if(!confirm('ဒီစာအုပ်နှင့် ပါဝင်သော ဖောက်သည် အကြွေးမှတ်တမ်းအားလုံး ဖျက်မှာသေချာပါသလား?')) return;
+  if(!requireOwnerPin('အကြွေးစာရင်းစာအုပ် ဖျက်ခြင်း')) return;
   await refreshDebtBooksBeforeWrite();
   state.debtBooks = state.debtBooks.filter(b => b.id !== id);
   setSyncStatus('syncing');
@@ -2848,7 +2877,7 @@ function openDebtCustomerDetail(bookId, custId){
           ${entriesSorted.map(e => `
             <tr>
               <td>${new Date(e.date).toLocaleDateString('my-MM')}</td>
-              <td>${e.type==='payment' ? 'ပေးချေငွေ' : 'အကြွေး'}${e.note ? ' · '+escapeAttr(e.note) : ''}</td>
+              <td>${e.type==='payment' ? 'ပေးချေငွေ' : 'အကြွေး'}${e.note ? ' · '+escapeAttr(e.note) : ''}${e.recordedBy ? ` <span style="opacity:.6; font-size:10px;">(${escapeAttr(e.recordedBy)})</span>` : ''}</td>
               <td style="text-align:right;">${e.type==='payment' ? '-' : ''}${money(e.amount)}</td>
             </tr>
           `).join('')}
@@ -2870,7 +2899,7 @@ async function addDebtPaymentPrompt(bookId, custId){
   const book = state.debtBooks.find(b => b.id === bookId);
   const cust = book && book.customers.find(c => c.id === custId);
   if(!cust){ showToast('ဖောက်သည် ရှာမတွေ့ပါ'); return; }
-  cust.entries.push({ id: uid(), date: Date.now(), amount: amt, note: '', type: 'payment' });
+  cust.entries.push({ id: uid(), date: Date.now(), amount: amt, note: '', type: 'payment', recordedBy: currentStaffName() });
   setSyncStatus('syncing');
   await saveDebtBookRecord(book);
   setSyncStatus('ok');
@@ -2880,6 +2909,7 @@ async function addDebtPaymentPrompt(bookId, custId){
 
 async function deleteDebtCustomerPrompt(bookId, custId){
   if(!confirm('ဒီဖောက်သည်၏ အကြွေးမှတ်တမ်းအားလုံး ဖျက်မှာသေချာပါသလား?')) return;
+  if(!requireOwnerPin('ဖောက်သည် အကြွေးမှတ်တမ်း ဖျက်ခြင်း')) return;
   await refreshDebtBooksBeforeWrite();
   const book = state.debtBooks.find(b => b.id === bookId);
   if(!book){ showToast('စာအုပ် ရှာမတွေ့ပါ'); return; }
