@@ -13,6 +13,7 @@
 <noscript><link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-app-compat.js" defer></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-firestore-compat.js" defer></script>
 <style>
@@ -1329,7 +1330,7 @@ function isSameDay(ts, d){
 }
 function renderDashboard(){
   const today = new Date();
-  const todaySales = state.sales.filter(s => isSameDay(s.time, today));
+  const todaySales = state.sales.filter(s => isSameDay(s.time, today) && !s.voided);
   const todayTotal = todaySales.reduce((a,s)=>a+s.total,0);
   const orderCount = todaySales.length;
   const avg = orderCount ? Math.round(todayTotal / orderCount) : 0;
@@ -1378,10 +1379,36 @@ function renderDashboard(){
       </div>
     ` : ''}
 
-    <div class="section-title">လတ်တလော အရောင်းများ</div>
+    <div class="section-title" style="display:flex; justify-content:space-between; align-items:center;">
+      <span>လတ်တလော အရောင်းများ</span>
+      <span style="font-size:12.5px; font-weight:600; color:var(--primary); cursor:pointer;" onclick="openSalesHistory()">အားလုံးကြည့်ရန် →</span>
+    </div>
     ${ recent.length === 0 ? emptyState('🧾','ရောင်းအားမရှိသေးပါ','"အရောင်း" တဘ်ကနေစတင်ရောင်းချနိုင်ပါတယ်') :
       recent.map(s => saleRowHTML(s)).join('') }
   `;
+}
+
+function openSalesHistory(){
+  const sorted = [...state.sales].sort((a,b) => b.time - a.time).slice(0, 200);
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>အရောင်းမှတ်တမ်း အားလုံး</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <input type="text" id="sh-search" placeholder="ဖောက်သည်အမည် ဒါမှမဟုတ် Order # ရှာရန်" oninput="filterSalesHistory(this.value)" style="margin-bottom:10px;">
+    <div id="sales-history-list">
+      ${ sorted.length === 0 ? emptyState('🧾','ရောင်းအားမရှိသေးပါ','') : sorted.map(s => saleRowHTML(s)).join('') }
+    </div>
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+}
+function filterSalesHistory(q){
+  q = q.trim().toLowerCase();
+  const sorted = [...state.sales].sort((a,b) => b.time - a.time).slice(0, 200);
+  const filtered = !q ? sorted : sorted.filter(s =>
+    s.id.slice(-5).toLowerCase().includes(q) ||
+    (s.customer && s.customer.name && s.customer.name.toLowerCase().includes(q))
+  );
+  document.getElementById('sales-history-list').innerHTML =
+    filtered.length === 0 ? emptyState('🔍','ရှာမတွေ့ပါ','') : filtered.map(s => saleRowHTML(s)).join('');
 }
 
 function emptyState(emoji, title, sub){
@@ -1392,12 +1419,12 @@ function saleRowHTML(s){
   const d = new Date(s.time);
   const timeStr = d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0') + '  ·  ' + d.getDate() + '/' + (d.getMonth()+1);
   return `
-    <div class="sale-item" onclick="openReceipt('${s.id}')">
+    <div class="sale-item" onclick="openReceipt('${s.id}')" style="${s.voided ? 'opacity:.55;' : ''}">
       <div>
-        <div class="si-id">#${s.id.slice(-5).toUpperCase()}</div>
+        <div class="si-id">#${s.id.slice(-5).toUpperCase()}${s.voided ? ' <span style="color:var(--danger); font-weight:700;">ပယ်ဖျက်ပြီး</span>' : ''}</div>
         <div class="si-time">${timeStr} · ${paymentLabel(s.paymentMethod)}${s.cashierName ? ' · '+s.cashierName : ''}</div>
       </div>
-      <div class="si-total">${money(s.total)}</div>
+      <div class="si-total" style="${s.voided ? 'text-decoration:line-through;' : ''}">${money(s.total)}</div>
     </div>
   `;
 }
@@ -1434,11 +1461,11 @@ function downloadFile(filename, content, mime){
 
 function exportProductsCSV(){
   if(state.products.length === 0){ showToast('ကုန်ပစ္စည်းမရှိသေးပါ'); return; }
-  const header = ['အမည်','အမျိုးအစား','ဈေးနှုန်း(လက်လီ)','လက်ကျန်','ရောင်းဈေး(လက်ကား)','ရောင်းဈေး(VIP)','ဝယ်ဈေးယူနစ်','ဝယ်ဈေး','ယူနစ်'];
+  const header = ['အမည်','အမျိုးအစား','ဈေးနှုန်း(လက်လီ)','လက်ကျန်','ရောင်းဈေး(လက်ကား)','ရောင်းဈေး(VIP)','ဝယ်ဈေးယူနစ်','ဝယ်ဈေး','ယူနစ်','Barcode'];
   const rows = state.products.map(p => [
     p.name, p.category, p.price, p.stock,
     p.priceWholesale || '', p.priceVIP || '',
-    p.costUnit || '', p.costValue || '', p.unit || '',
+    p.costUnit || '', p.costValue || '', p.unit || '', p.barcode || '',
   ]);
   downloadFile(`hasanpos-products-${dateStamp()}.csv`, toCSV(header, rows), 'text/csv;charset=utf-8;');
   showToast('ကုန်ပစ္စည်းစာရင်း Export ပြီးပါပြီ');
@@ -1448,10 +1475,10 @@ function saleRowsForExport(list){
   return list.map(s => {
     const d = new Date(s.time);
     const itemsStr = s.items.map(it => `${it.name}×${it.qty}`).join('; ');
-    return [ s.id, d.toLocaleDateString('en-CA'), d.toTimeString().slice(0,8), itemsStr, s.subtotal, s.discountPct, s.total, paymentLabel(s.paymentMethod), s.cashierName || '' ];
+    return [ s.id, d.toLocaleDateString('en-CA'), d.toTimeString().slice(0,8), itemsStr, s.subtotal, s.discountPct, s.total, paymentLabel(s.paymentMethod), s.cashierName || '', s.voided ? 'ပယ်ဖျက်ပြီး' : '' ];
   });
 }
-const SALES_CSV_HEADER = ['ID','ရက်စွဲ','အချိန်','ကုန်ပစ္စည်းများ','Subtotal','Discount %','Total','ငွေပေးချေမှု','ရောင်းချသူ'];
+const SALES_CSV_HEADER = ['ID','ရက်စွဲ','အချိန်','ကုန်ပစ္စည်းများ','Subtotal','Discount %','Total','ငွေပေးချေမှု','ရောင်းချသူ','အခြေအနေ'];
 
 function exportSalesCSV(){
   if(state.sales.length === 0){ showToast('ရောင်းအားမှတ်တမ်း မရှိသေးပါ'); return; }
@@ -1528,7 +1555,8 @@ function parseImportCSV(text){
     const costUnit = (cells[7]||'').trim();
     const costValue = Number(String(cells[8]||'0').replace(/[,\s]/g,'')) || 0;
     const unit = (cells[9]||'').trim();
-    items.push({ name, category, price, stock, priceWholesale, priceVIP, costUnit, costValue, unit });
+    const barcode = (cells[10]||'').trim();
+    items.push({ name, category, price, stock, priceWholesale, priceVIP, costUnit, costValue, unit, barcode });
   }
   return items;
 }
@@ -1603,12 +1631,13 @@ async function processImport(){
       if(it.costUnit) existing.costUnit = it.costUnit;
       if(it.costValue) existing.costValue = it.costValue;
       if(it.unit) existing.unit = it.unit;
+      if(it.barcode) existing.barcode = it.barcode;
       updated++;
     } else {
       state.products.push({
         id: uid(), name: it.name, category: it.category, price: it.price, stock: it.stock,
         priceWholesale: it.priceWholesale, priceVIP: it.priceVIP,
-        costUnit: it.costUnit, costValue: it.costValue, unit: it.unit || 'ခု',
+        costUnit: it.costUnit, costValue: it.costValue, unit: it.unit || 'ခု', barcode: it.barcode || '',
       });
       added++;
     }
@@ -1629,7 +1658,8 @@ function renderPOS(){
   return `
     <div class="search-bar" style="margin-bottom:12px;">
       <span>🔍</span>
-      <input type="text" id="pos-search" placeholder="ကုန်ပစ္စည်းရှာရန်..." oninput="filterPOSSearch(this.value)">
+      <input type="text" id="pos-search" placeholder="ကုန်ပစ္စည်းရှာရန်..." oninput="filterPOSSearch(this.value)" style="flex:1; border:none; background:none;">
+      <span style="cursor:pointer; font-size:19px; padding:2px 4px;" onclick="scanBarcodeForCart()">📷</span>
     </div>
     <div class="chip-row" id="cat-chip-row">
       ${cats.map(c => `<div class="chip ${c===state.activeCategory?'active':''}" onclick="setCategory('${escapeAttr(c)}')">${c}</div>`).join('')}
@@ -1640,6 +1670,61 @@ function renderPOS(){
   `;
 }
 function escapeAttr(s){ return String(s).replace(/'/g,"\\'"); }
+
+/* Barcode scanning — uses html5-qrcode (camera + decoding) so it works the
+   same way whether looking up a product at the register or filling in a
+   barcode on the product-edit form. Only one scan session runs at a time;
+   closeSheet() always stops the camera too, so it's never left running in
+   the background. */
+let __html5Qr = null;
+function openBarcodeScanner(onResult){
+  if(typeof Html5Qrcode === 'undefined'){ showToast('Scanner library မတင်ရသေးပါ — network ချိတ်ဆက်မှု စစ်ပြီး ထပ်စမ်းပါ'); return; }
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>📷 Barcode Scan</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div id="barcode-reader" style="width:100%; border-radius:12px; overflow:hidden; background:#000;"></div>
+    <div class="si-sub" style="margin-top:10px; text-align:center;">Barcode ကို frame အတွင်း ရောက်အောင် ကိုင်ထားပါ</div>
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+  window.__barcodeCallback = onResult;
+
+  __html5Qr = new Html5Qrcode('barcode-reader');
+  __html5Qr.start(
+    { facingMode: 'environment' },
+    { fps: 10, qrbox: { width: 250, height: 150 } },
+    (decodedText) => {
+      const cb = window.__barcodeCallback;
+      closeSheet();
+      if(cb) cb(decodedText);
+    },
+    () => {} // per-frame "nothing found yet" — normal while aiming, not an error
+  ).catch(() => {
+    showToast('Camera ဖွင့်၍မရပါ — camera ခွင့်ပြုချက် ပေးထားရဲ့လား စစ်ပါ');
+    closeSheet();
+  });
+}
+function stopBarcodeScanner(){
+  if(__html5Qr){
+    const q = __html5Qr;
+    __html5Qr = null;
+    q.stop().then(() => q.clear()).catch(() => {});
+  }
+}
+
+function scanBarcodeForCart(){
+  openBarcodeScanner((code) => {
+    const p = state.products.find(x => x.barcode && x.barcode === code);
+    if(p){
+      addToCart(p.id);
+      showToast(`${p.name} ထည့်ပြီးပါပြီ`);
+    } else {
+      if(confirm(`ဒီ barcode (${code}) နှင့် ကုန်ပစ္စည်း မတွေ့ပါ — ကုန်ပစ္စည်းအသစ် ထည့်မှာလား?`)){
+        openProductForm();
+        setTimeout(() => { const el = document.getElementById('pf-barcode'); if(el) el.value = code; }, 50);
+      }
+    }
+  });
+}
 
 /* Sorts product names alphabetically the way a Myanmar reader expects
    (က, ခ, ဂ ... order), while still sorting English/Latin names sensibly
@@ -1666,7 +1751,7 @@ function filterPOSSearch(q){
   q = q.trim().toLowerCase();
   const filtered = sortProductsByName(state.products.filter(p =>
     (state.activeCategory==='အားလုံး' || p.category === state.activeCategory) &&
-    p.name.toLowerCase().includes(q)
+    p.name.toLowerCase().includes(q) || (p.barcode && p.barcode.toLowerCase().includes(q))
   ));
   document.getElementById('pos-grid').innerHTML = filtered.length===0
     ? emptyState('🔍','ရှာမတွေ့ပါ','အမည်တခြားစမ်းကြည့်ပါ')
@@ -1748,7 +1833,10 @@ function openCartSheet(){
   renderCartSheetContent();
   document.getElementById('sheet-overlay').classList.add('show');
 }
-function closeSheet(){ document.getElementById('sheet-overlay').classList.remove('show'); }
+function closeSheet(){
+  document.getElementById('sheet-overlay').classList.remove('show');
+  stopBarcodeScanner();
+}
 
 function renderCartSheetContent(){
   const sub = cartSubtotal();
@@ -2032,13 +2120,69 @@ function openReceipt(saleId, justCompleted){
         <span>${paymentLabel(s.paymentMethod)}${s.paymentType==='credit' ? ' 📒' : ''} · ငွေလက်ခံသူ - ${s.cashierName ? escapeAttr(s.cashierName) : '..............'}</span>
       </div>
     </div>
+    ${ s.voided ? `
+      <div class="si-sub" style="background:#FBEAE7; color:var(--danger); padding:10px; border-radius:var(--radius-sm); margin-top:14px; font-weight:600;">
+        🚫 ဒီအရောင်းကို ပယ်ဖျက်ပြီးပါပြီ${s.voidedBy ? ` (${escapeAttr(s.voidedBy)})` : ''}${s.voidReason ? ` — ${escapeAttr(s.voidReason)}` : ''}
+      </div>
+    ` : '' }
     <button class="btn btn-outline btn-block" style="margin-top:14px;" onclick="printReceipt()">🖨️ ဘောင်ချာ Print ထုတ်မည်</button>
+    ${ !s.voided && !justCompleted ? `<button class="btn btn-outline btn-block" style="margin-top:8px; color:var(--danger); border-color:var(--danger);" onclick="voidSalePrompt('${s.id}')">🚫 ဒီအရောင်းကို ပယ်ဖျက်မည် (Void)</button>` : '' }
     <button class="btn btn-primary btn-block" style="margin-top:8px;" onclick="closeSheet()">ပြီးပါပြီ</button>
   `;
   document.getElementById('sheet-overlay').classList.add('show');
 }
 function printReceipt(){
   window.print();
+}
+
+/* Voiding never deletes the sale — it stays in history (crossed out) for
+   the audit trail, but is excluded from every revenue/profit total.
+   Stock is put back, and a credit sale's debt entry is reversed with a
+   new offsetting entry (never edited/removed) so the ledger still shows
+   exactly what happened. */
+async function voidSalePrompt(saleId){
+  const s = state.sales.find(x => x.id === saleId);
+  if(!s || s.voided) return;
+  if(!confirm(`ဒီအရောင်း (${money(s.total)}) ကို ပယ်ဖျက်မှာ သေချာပါသလား? ကုန်ပစ္စည်း လက်ကျန်ပြန်တိုးမည်ဖြစ်ပြီး ဤလုပ်ဆောင်ချက်ကို ပြန်ပြင်၍မရပါ။`)) return;
+  if(!requireOwnerPin('အရောင်း ပယ်ဖျက်ခြင်း')) return;
+  const reason = (prompt('ပယ်ဖျက်ရသည့် အကြောင်းရင်း (ရွေးချယ်ခွင့်)') || '').trim();
+
+  const changedProducts = [];
+  s.items.forEach(it => {
+    const p = state.products.find(x => x.id === it.id);
+    if(p){ p.stock += it.qty; changedProducts.push(p); }
+  });
+
+  let debtBookToSave = null;
+  if(s.paymentType === 'credit' && s.debtBookId && s.debtCustomerId){
+    await refreshDebtBooksBeforeWrite();
+    const book = state.debtBooks.find(b => b.id === s.debtBookId);
+    const cust = book && book.customers.find(c => c.id === s.debtCustomerId);
+    if(cust){
+      cust.entries.push({
+        id: uid(), date: Date.now(), amount: s.total, type: 'payment',
+        note: `အော်ဒါ #${s.id.slice(-5).toUpperCase()} ပယ်ဖျက်ခြင်း`,
+        recordedBy: currentStaffName(),
+      });
+      debtBookToSave = book;
+    }
+  }
+
+  s.voided = true;
+  s.voidedAt = Date.now();
+  s.voidedBy = currentStaffName();
+  s.voidReason = reason;
+
+  openReceipt(saleId); // optimistic UI — refresh immediately, save in background
+  showToast('အရောင်း ပယ်ဖျက်ပြီးပါပြီ');
+
+  setSyncStatus('syncing');
+  Promise.all([
+    saveSaleRecord(s),
+    saveProductRecords(changedProducts),
+    debtBookToSave ? saveDebtBookRecord(debtBookToSave) : Promise.resolve(),
+  ]).then(() => setSyncStatus('ok'))
+    .catch(() => { setSyncStatus('err'); showToast('⚠️ Cloud သို့ သိမ်းဆည်းရာတွင် ကြန့်ကြာနေသည်'); });
 }
 
 /* ============ PRODUCTS ============ */
@@ -2104,6 +2248,12 @@ function openProductForm(id){
 
     <label>ကုန်ပစ္စည်းအမည်</label>
     <input type="text" id="pf-name" value="${editing ? escapeAttr(editing.name) : ''}" placeholder="ဥပမာ - ကော်ဖီမစ်">
+
+    <label>Barcode (ရွေးချယ်ခွင့်)</label>
+    <div class="field-row">
+      <div><input type="text" id="pf-barcode" value="${editing && editing.barcode ? escapeAttr(editing.barcode) : ''}" placeholder="scan လုပ်ပါ ဒါမှမဟုတ် ကိုယ်တိုင်ရိုက်ပါ"></div>
+      <button type="button" class="btn btn-outline" style="flex:0 0 auto; padding:0 16px;" onclick="openBarcodeScanner(code => { document.getElementById('pf-barcode').value = code; })">📷</button>
+    </div>
 
     <label>အမျိုးအစား</label>
     <select id="pf-category">
@@ -2243,8 +2393,13 @@ async function saveProductForm(id){
   const stock = Number(document.getElementById('pf-stock').value) || 0;
   let unit = document.getElementById('pf-unit').value;
   const newUnit2 = document.getElementById('pf-newunit2').value.trim();
+  const barcode = document.getElementById('pf-barcode').value.trim();
 
   if(!name){ showToast('ကုန်ပစ္စည်းအမည် ထည့်ပါ'); return; }
+  if(barcode){
+    const dup = state.products.find(p => p.barcode === barcode && p.id !== id);
+    if(dup && !confirm(`ဒီ barcode ကို "${dup.name}" မှာ သုံးပြီးသားပါ — ဆက်သိမ်းမှာလား?`)) return;
+  }
   if(category === '__new__'){
     if(!newCat){ showToast('အမျိုးအစားအမည် ထည့်ပါ'); return; }
     category = newCat;
@@ -2263,7 +2418,7 @@ async function saveProductForm(id){
     if(!state.unitOptions.includes(unit)){ state.unitOptions.push(unit); unitOptionsChanged = true; }
   }
 
-  const extra = { priceWholesale, priceVIP, costUnit, costValue, unit, photo: window.__pendingPhoto || null };
+  const extra = { priceWholesale, priceVIP, costUnit, costValue, unit, barcode, photo: window.__pendingPhoto || null };
   let savedProduct;
   if(id){
     const p = state.products.find(x => x.id === id);
@@ -2311,17 +2466,18 @@ function last7Days(){
   return days;
 }
 function renderReports(){
+  const activeSales = state.sales.filter(s => !s.voided);
   const days = last7Days();
-  const totals = days.map(d => state.sales.filter(s => isSameDay(s.time, d)).reduce((a,s)=>a+s.total,0));
+  const totals = days.map(d => activeSales.filter(s => isSameDay(s.time, d)).reduce((a,s)=>a+s.total,0));
   const weekTotal = totals.reduce((a,b)=>a+b,0);
 
   const itemCount = {};
-  state.sales.forEach(s => s.items.forEach(it => { itemCount[it.name] = (itemCount[it.name]||0) + it.qty; }));
+  activeSales.forEach(s => s.items.forEach(it => { itemCount[it.name] = (itemCount[it.name]||0) + it.qty; }));
   const top = Object.entries(itemCount).sort((a,b)=>b[1]-a[1]).slice(0,5);
 
-  const weekSales = state.sales.filter(s => days.some(d => isSameDay(s.time, d)));
+  const weekSales = activeSales.filter(s => days.some(d => isSameDay(s.time, d)));
   const weekProfit = profitFromSales(weekSales);
-  const allTimeProfit = profitFromSales(state.sales);
+  const allTimeProfit = profitFromSales(activeSales);
 
   const weekExpense = state.expenses.filter(e => days.some(d => isSameDay(e.date, d))).reduce((a,e)=>a+e.amount,0);
   const allTimeExpense = state.expenses.reduce((a,e)=>a+e.amount,0);
@@ -2331,7 +2487,7 @@ function renderReports(){
   return `
     <div class="stat-grid" style="margin-bottom:16px;">
       <div class="stat-card"><div class="label">လွန်ခဲ့သော ၇ ရက် ရောင်းအား</div><div class="value">${money(weekTotal)}</div></div>
-      <div class="stat-card accent"><div class="label">အော်ဒါစုစုပေါင်း</div><div class="value">${state.sales.length}</div></div>
+      <div class="stat-card accent"><div class="label">အော်ဒါစုစုပေါင်း</div><div class="value">${activeSales.length}</div></div>
     </div>
 
     <div class="stat-grid" style="margin-bottom:16px;">
@@ -2385,7 +2541,7 @@ function profitFromSales(sales){
   let unknownCount = 0;
   const seenUnknown = new Set();
   const byProductMap = {};
-  sales.forEach(s => s.items.forEach(it => {
+  sales.filter(s => !s.voided).forEach(s => s.items.forEach(it => {
     const p = state.products.find(x => x.id === it.id);
     if(!p || !p.costValue){
       if(!seenUnknown.has(it.id)){ seenUnknown.add(it.id); unknownCount++; }
@@ -2403,7 +2559,7 @@ function drawChart(){
   if(!canvas || typeof Chart === 'undefined') return;
   const days = last7Days();
   const labels = days.map(d => d.getDate()+'/'+(d.getMonth()+1));
-  const totals = days.map(d => state.sales.filter(s => isSameDay(s.time, d)).reduce((a,s)=>a+s.total,0));
+  const totals = days.map(d => state.sales.filter(s => isSameDay(s.time, d) && !s.voided).reduce((a,s)=>a+s.total,0));
   if(__chartInstance) __chartInstance.destroy();
   __chartInstance = new Chart(canvas.getContext('2d'), {
     type: 'bar',
