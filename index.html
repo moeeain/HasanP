@@ -1342,6 +1342,7 @@ function renderDashboard(){
   const recent = [...state.sales].sort((a,b)=>b.time-a.time).slice(0,5);
 
   const debtTotal = state.debtBooks.reduce((sum,b) => sum + b.customers.reduce((s,c) => s + debtBalance(c), 0), 0);
+  const overdueCount = state.debtBooks.reduce((sum,b) => sum + b.customers.filter(c => { const d=debtAging(c); return d!==null && d>=DEBT_WARN_DAYS; }).length, 0);
   const todayExpense = state.expenses.filter(e => isSameDay(e.date, today)).reduce((a,e)=>a+e.amount,0);
 
   return `
@@ -1356,7 +1357,7 @@ function renderDashboard(){
     </div>
 
     <div class="field-row" style="margin:14px 0;">
-      <button class="btn btn-outline" onclick="openDebtBooksList()">📒 အကြွေးစာရင်း${debtTotal>0 ? `<br><span style="font-size:11px; font-weight:700;">${money(debtTotal)}</span>` : ''}</button>
+      <button class="btn btn-outline" onclick="openDebtBooksList()">📒 အကြွေးစာရင်း${debtTotal>0 ? `<br><span style="font-size:11px; font-weight:700;">${money(debtTotal)}${overdueCount>0 ? ` · <span style="color:var(--danger);">⚠️ ${overdueCount}</span>` : ''}</span>` : ''}</button>
       <button class="btn btn-outline" onclick="openExpenseSheet()">💸 ကုန်ကျစရိတ်${todayExpense>0 ? `<br><span style="font-size:11px; font-weight:700;">ယနေ့ ${money(todayExpense)}</span>` : ''}</button>
     </div>
 
@@ -2644,6 +2645,39 @@ function debtBalance(customer){
   return customer.entries.reduce((sum, e) => sum + (e.type === 'payment' ? -e.amount : e.amount), 0);
 }
 
+const DEBT_WARN_DAYS = 30;
+const DEBT_DANGER_DAYS = 60;
+
+/* How many days the OLDEST still-unpaid debt has been outstanding.
+   Payments aren't tied to a specific purchase, so this applies them
+   oldest-debt-first (FIFO) to work out which debt entries are actually
+   still uncovered, then ages the earliest of those. Returns null when
+   the customer owes nothing. */
+function debtAging(customer){
+  const entries = [...customer.entries].sort((a,b) => a.date - b.date);
+  let paymentPool = 0;
+  const debts = [];
+  entries.forEach(e => {
+    if(e.type === 'payment') paymentPool += e.amount;
+    else debts.push({ date: e.date, remaining: e.amount });
+  });
+  for(const d of debts){
+    if(paymentPool <= 0) break;
+    const applied = Math.min(paymentPool, d.remaining);
+    d.remaining -= applied;
+    paymentPool -= applied;
+  }
+  const oldestUnpaid = debts.find(d => d.remaining > 0.0001);
+  if(!oldestUnpaid) return null;
+  return Math.floor((Date.now() - oldestUnpaid.date) / 86400000);
+}
+function debtAgingBadge(days){
+  if(days === null) return '';
+  if(days >= DEBT_DANGER_DAYS) return ` <span style="color:var(--danger); font-weight:700;">⚠️ ${days} ရက် လွန်</span>`;
+  if(days >= DEBT_WARN_DAYS) return ` <span style="color:var(--accent-dark); font-weight:700;">${days} ရက် လွန်</span>`;
+  return '';
+}
+
 /* Exports every debt book to a real .xlsx workbook (via the SheetJS
    library) so it opens directly in Excel or Google Sheets — one sheet
    with each customer's current balance, and one with the full entry
@@ -2765,19 +2799,22 @@ async function deleteExpense(id){
 }
 
 function openDebtBooksList(){
+  const overdueTotal = state.debtBooks.reduce((sum,b) => sum + b.customers.filter(c => { const d=debtAging(c); return d!==null && d>=DEBT_WARN_DAYS; }).length, 0);
   document.getElementById('sheet-content').innerHTML = `
     <div class="sheet-handle"></div>
     <div class="sheet-header"><h3>📒 အကြွေးစာရင်းစာအုပ်များ</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
     <div class="si-sub" style="margin-bottom:10px;">အကြွေးဝယ်သည့် ဖောက်သည်များကို စာအုပ်အလိုက် ခွဲခြားမှတ်တမ်းတင်နိုင်ပါသည် — POS ရောင်းချချိန် "အကြွေး" ရွေးလိုက်ရင် ဒီစာအုပ်များထဲက ဖောက်သည်စာရင်းကို ရွေးချယ်နိုင်ပါမည်။</div>
+    ${ overdueTotal>0 ? `<div class="si-sub" style="background:#FBEAE7; color:var(--danger); padding:10px; border-radius:var(--radius-sm); margin-bottom:12px; font-weight:600;">⚠️ ရက် ${DEBT_WARN_DAYS} ကျော် အကြွေးလွန်နေသူ ${overdueTotal} ဦး ရှိပါသည်</div>` : '' }
     <div id="debtbook-list">
       ${ state.debtBooks.length===0 ? `<div class="si-sub">အကြွေးစာရင်းစာအုပ် မရှိသေးပါ</div>` :
         state.debtBooks.map(b => {
           const total = b.customers.reduce((sum,c) => sum + debtBalance(c), 0);
+          const overdueCount = b.customers.filter(c => { const d=debtAging(c); return d!==null && d>=DEBT_WARN_DAYS; }).length;
           return `
           <div class="staff-row" style="cursor:pointer;" onclick="openDebtBookDetail('${b.id}')">
             <div class="sr-avatar">📒</div>
             <div class="sr-info">
-              <div class="sr-name">${escapeAttr(b.name)}</div>
+              <div class="sr-name">${escapeAttr(b.name)}${overdueCount>0 ? ` <span style="color:var(--danger); font-size:11px; font-weight:700;">⚠️ ${overdueCount}</span>` : ''}</div>
               <div class="sr-pin">ဖောက်သည် ${b.customers.length} ဦး · ကျန်ငွေ ${money(total)}</div>
             </div>
             <div class="p-actions">
@@ -2827,12 +2864,13 @@ function openDebtBookDetail(bookId){
       ${ book.customers.length===0 ? emptyState('👤','ဖောက်သည်မရှိသေးပါ','') :
         book.customers.map(c => {
           const bal = debtBalance(c);
+          const aging = debtAging(c);
           return `
           <div class="staff-row" style="cursor:pointer;" onclick="openDebtCustomerDetail('${book.id}','${c.id}')">
             <div class="sr-avatar">${c.name.slice(0,1)}</div>
             <div class="sr-info">
               <div class="sr-name">${escapeAttr(c.name)}${c.phone ? ' · '+escapeAttr(c.phone) : ''}</div>
-              <div class="sr-pin">ကျန်ငွေ: ${money(bal)}</div>
+              <div class="sr-pin">ကျန်ငွေ: ${money(bal)}${debtAgingBadge(aging)}</div>
             </div>
           </div>
         `; }).join('') }
@@ -2863,6 +2901,7 @@ function openDebtCustomerDetail(bookId, custId){
   const cust = book && book.customers.find(c => c.id === custId);
   if(!book || !cust) return;
   const bal = debtBalance(cust);
+  const aging = debtAging(cust);
   const entriesSorted = [...cust.entries].sort((a,b) => b.date - a.date);
   document.getElementById('sheet-content').innerHTML = `
     <div class="sheet-handle"></div>
@@ -2870,6 +2909,11 @@ function openDebtCustomerDetail(bookId, custId){
     <div class="stat-grid" style="margin-bottom:14px;">
       <div class="stat-card accent"><div class="label">ကျန်ငွေ</div><div class="value">${money(bal)}</div></div>
     </div>
+    ${ aging !== null && aging >= DEBT_WARN_DAYS ? `
+      <div class="si-sub" style="background:${aging>=DEBT_DANGER_DAYS?'#FBEAE7':'#FCF3E3'}; color:${aging>=DEBT_DANGER_DAYS?'var(--danger)':'var(--accent-dark)'}; padding:10px; border-radius:var(--radius-sm); margin-bottom:14px; font-weight:600;">
+        ⚠️ ဒီဖောက်သည်ရဲ့ အကြွေးအဟောင်းဆုံးက ${aging} ရက် ကြာနေပါပြီ
+      </div>
+    ` : '' }
     <div class="card">
       ${ entriesSorted.length===0 ? emptyState('📒','မှတ်တမ်းမရှိသေးပါ','') : `
         <table class="table-simple">
