@@ -2087,7 +2087,7 @@ function openReceipt(saleId, justCompleted){
     <div class="sheet-handle"></div>
     <div class="sheet-header"><h3>${justCompleted ? 'အရောင်း အောင်မြင်ပါသည် ✓' : 'ဘောင်ချာ'}</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
     <div class="receipt" id="receipt-print-area">
-      <div class="rv-title">${state.settings.shopName || 'ဦးတင်အောင် ကုန်စုံဆိုင်'}</div>
+      <div class="rv-title">${state.settings.shopName || '٧٨٦ '<br>'ဦးတင်အောင် ကုန်စုံဆိုင်'}</div>
       ${ state.settings.address ? `<div class="rv-address">${escapeAttr(state.settings.address)}</div>` : '' }
       ${ state.settings.shopPhones ? `<div class="rv-phones">ဆိုင်ဖုန်း - ${escapeAttr(state.settings.shopPhones)}</div>` : '' }
       ${ state.settings.homePhones ? `<div class="rv-phones">အိမ်ဖုန်း - ${escapeAttr(state.settings.homePhones)}</div>` : '' }
