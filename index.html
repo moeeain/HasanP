@@ -471,6 +471,8 @@ let state = {
   debtBooks: [],      // {id, name, customers:[{id,name,phone,entries:[{id,date,amount,note,type}]}]}
   expenses: [],       // {id, date, amount, category, note}
   expenseCategories: ['ငှားရမ်းခ','လျှပ်စစ်','ဝန်ထမ်းလစာ','ကုန်ပစ္စည်းဝယ်ယူခ','သယ်ယူပို့ဆောင်ခ','အခြား'],
+  restocks: [],              // {id, date, productId, productName, qty, unitCost, totalCost, note, recordedBy}
+  cashReconciliations: [],   // {id, date, openingCash, countedCash, expectedCash, difference, note, recordedBy}
   cart: [],           // {id, name, price, qty, icon, unit}
   activeCategory: 'အားလုံး',
   activeScreen: 'dashboard',
@@ -858,6 +860,36 @@ async function saveExpenseCategories(){
   await rawStoreSet(skey('expenseCategories'), JSON.stringify(state.expenseCategories));
 }
 
+async function saveRestockRecord(r){
+  if(FIREBASE_READY){ await firebaseSaveRecord('restocks', r.id, r); return; }
+  await saveChunkedList('restocks', state.restocks);
+}
+async function loadRestocksFromStorage(){
+  if(FIREBASE_READY){
+    const list = await firebaseLoadCollection('restocks');
+    if(list && list.length) return list;
+    const legacy = await loadChunkedList('restocks', null);
+    if(legacy && legacy.length) await Promise.all(legacy.map(x => firebaseSaveRecord('restocks', x.id, x)));
+    return legacy;
+  }
+  return await loadChunkedList('restocks', null);
+}
+
+async function saveCashRecRecord(r){
+  if(FIREBASE_READY){ await firebaseSaveRecord('cashRecs', r.id, r); return; }
+  await saveChunkedList('cashRecs', state.cashReconciliations);
+}
+async function loadCashRecsFromStorage(){
+  if(FIREBASE_READY){
+    const list = await firebaseLoadCollection('cashRecs');
+    if(list && list.length) return list;
+    const legacy = await loadChunkedList('cashRecs', null);
+    if(legacy && legacy.length) await Promise.all(legacy.map(x => firebaseSaveRecord('cashRecs', x.id, x)));
+    return legacy;
+  }
+  return await loadChunkedList('cashRecs', null);
+}
+
 async function saveSales(){
   if(FIREBASE_READY){
     await Promise.all(state.sales.map(s => firebaseSaveRecord('sales', s.id, s)));
@@ -955,7 +987,7 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
   if(ob) ob.style.display = 'none';
   state.shopCode = code;
   setSyncStatus('syncing');
-  const [pList, sList, setRaw, catRaw, cuRaw, stRaw, dbList, uoRaw, exList, ecRaw] = await Promise.all([
+  const [pList, sList, setRaw, catRaw, cuRaw, stRaw, dbList, uoRaw, exList, ecRaw, rsList, crList] = await Promise.all([
     loadProductsFromStorage(),
     loadSalesFromStorage(),
     storageGetSafe(skey('settings')),
@@ -966,6 +998,8 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
     storageGetSafe(skey('unitOptions')),
     loadExpensesFromStorage(),
     storageGetSafe(skey('expenseCategories')),
+    loadRestocksFromStorage(),
+    loadCashRecsFromStorage(),
   ]);
 
   state.products = pList || [];
@@ -979,6 +1013,8 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
   state.debtBooks = dbList || [];
   state.expenses = exList || [];
   state.expenseCategories = safeParse(ecRaw, ['ငှားရမ်းခ','လျှပ်စစ်','ဝန်ထမ်းလစာ','ကုန်ပစ္စည်းဝယ်ယူခ','သယ်ယူပို့ဆောင်ခ','အခြား']);
+  state.restocks = rsList || [];
+  state.cashReconciliations = crList || [];
 
   if(!pList && seedIfEmpty){
     seedDemoData();
@@ -1005,7 +1041,7 @@ async function loadShop(code, {seedIfEmpty=false} = {}){
 async function manualSync(silent){
   if(!state.shopCode) return;
   setSyncStatus('syncing');
-  const [pList, sList, setRaw, catRaw, cuRaw, stRaw, dbList, uoRaw, exList, ecRaw] = await Promise.all([
+  const [pList, sList, setRaw, catRaw, cuRaw, stRaw, dbList, uoRaw, exList, ecRaw, rsList, crList] = await Promise.all([
     loadProductsFromStorage(),
     loadSalesFromStorage(),
     storageGetSafe(skey('settings')),
@@ -1016,6 +1052,8 @@ async function manualSync(silent){
     storageGetSafe(skey('unitOptions')),
     loadExpensesFromStorage(),
     storageGetSafe(skey('expenseCategories')),
+    loadRestocksFromStorage(),
+    loadCashRecsFromStorage(),
   ]);
   if(pList){ state.products = pList; migrateLegacyCostFields(); }
   if(sList) state.sales = sList;
@@ -1027,6 +1065,8 @@ async function manualSync(silent){
   if(dbList) state.debtBooks = dbList;
   if(exList) state.expenses = exList;
   if(ecRaw) state.expenseCategories = safeParse(ecRaw, state.expenseCategories);
+  if(rsList) state.restocks = rsList;
+  if(crList) state.cashReconciliations = crList;
   await runArchiveCheck();
   setSyncStatus('ok');
   renderTopbar();
@@ -1361,6 +1401,7 @@ function renderDashboard(){
       <button class="btn btn-outline" onclick="openDebtBooksList()">📒 အကြွေးစာရင်း${debtTotal>0 ? `<br><span style="font-size:11px; font-weight:700;">${money(debtTotal)}${overdueCount>0 ? ` · <span style="color:var(--danger);">⚠️ ${overdueCount}</span>` : ''}</span>` : ''}</button>
       <button class="btn btn-outline" onclick="openExpenseSheet()">💸 ကုန်ကျစရိတ်${todayExpense>0 ? `<br><span style="font-size:11px; font-weight:700;">ယနေ့ ${money(todayExpense)}</span>` : ''}</button>
     </div>
+    <button class="btn btn-outline btn-block" style="margin-bottom:14px;" onclick="openCashRecForm()">🧮 ဒိန်ငွေ ရင်းချေမည်</button>
 
     <div class="stat-grid">
       <div class="stat-card"><div class="label">ကုန်ပစ္စည်းစုစုပေါင်း</div><div class="value">${state.products.length}</div></div>
@@ -2087,7 +2128,7 @@ function openReceipt(saleId, justCompleted){
     <div class="sheet-handle"></div>
     <div class="sheet-header"><h3>${justCompleted ? 'အရောင်း အောင်မြင်ပါသည် ✓' : 'ဘောင်ချာ'}</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
     <div class="receipt" id="receipt-print-area">
-      <div class="rv-title">${state.settings.shopName || '٧٨٦ '<br>'ဦးတင်အောင် ကုန်စုံဆိုင်'}</div>
+      <div class="rv-title">${state.settings.shopName || 'ဦးတင်အောင် ကုန်စုံဆိုင်'}</div>
       ${ state.settings.address ? `<div class="rv-address">${escapeAttr(state.settings.address)}</div>` : '' }
       ${ state.settings.shopPhones ? `<div class="rv-phones">ဆိုင်ဖုန်း - ${escapeAttr(state.settings.shopPhones)}</div>` : '' }
       ${ state.settings.homePhones ? `<div class="rv-phones">အိမ်ဖုန်း - ${escapeAttr(state.settings.homePhones)}</div>` : '' }
@@ -2194,7 +2235,8 @@ function renderProducts(){
       <span>🔍</span>
       <input type="text" placeholder="ကုန်ပစ္စည်းရှာရန်..." value="${productSearchQ}" oninput="onProductSearch(this.value)">
     </div>
-    <button class="btn btn-ghost btn-block" style="margin-bottom:14px;" onclick="openImportSheet()">📥 CSV မှ ကုန်ပစ္စည်း အများအပြား Import</button>
+    <button class="btn btn-ghost btn-block" style="margin-bottom:8px;" onclick="openImportSheet()">📥 CSV မှ ကုန်ပစ္စည်း အများအပြား Import</button>
+    <button class="btn btn-ghost btn-block" style="margin-bottom:14px;" onclick="openRestockHistory()">📦 Restock (ကုန်ဝင်) မှတ်တမ်း</button>
     <div id="product-list">
       ${ list.length===0 ? emptyState('📦','ကုန်ပစ္စည်းမရှိသေးပါ','+ ခလုတ်နှိပ်ပြီး စတင်ထည့်သွင်းပါ') : list.map(p => productListItemHTML(p)).join('') }
     </div>
@@ -2219,6 +2261,7 @@ function productListItemHTML(p){
         <div class="meta">${p.category} · လက်လီ ${money(p.price)}${p.priceWholesale ? ` · လက်ကား ${money(p.priceWholesale)}` : ''}${p.priceVIP ? ` · VIP ${money(p.priceVIP)}` : ''} · လက်ကျန် ${p.stock} ${p.unit||''}</div>
       </div>
       <div class="p-actions">
+        <div class="icon-btn" onclick="openRestockForm('${p.id}')">📦</div>
         <div class="icon-btn" onclick="openProductForm('${p.id}')">✎</div>
         <div class="icon-btn danger" onclick="deleteProduct('${p.id}')">🗑</div>
       </div>
@@ -2453,6 +2496,189 @@ async function deleteProduct(id){
   showToast('ဖျက်ပြီးပါပြီ');
 }
 
+/* ============ RESTOCK (ကုန်ဝင်) ============ */
+function openRestockForm(productId){
+  const p = state.products.find(x => x.id === productId);
+  if(!p) return;
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>📦 ${escapeAttr(p.name)} — ကုန်သွင်းမည်</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div class="si-sub" style="margin-bottom:12px;">လက်ရှိလက်ကျန်: ${p.stock} ${p.unit||''}</div>
+
+    <label>ဝင်လာသော အရေအတွက်</label>
+    <input type="number" id="rs-qty" placeholder="0">
+
+    <label>ဝယ်ဈေး (တစ်ခုလျှင်) — ရွေးချယ်ခွင့်</label>
+    <input type="number" id="rs-unitcost" value="${p.costValue || ''}" placeholder="0">
+    <div class="si-sub">* ဒီနေရာ ဖြည့်ရင် ကုန်ပစ္စည်းရဲ့ ဝယ်ဈေးကိုပါ အလိုအလျောက် update လုပ်ပေးပါမည်</div>
+
+    <label>မှတ်ချက် (ရွေးချယ်ခွင့်)</label>
+    <input type="text" id="rs-note" placeholder="ဥပမာ - ဆီချက်ဆိုင်မှ ဝယ်ယူ">
+
+    <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="saveRestock('${p.id}')">ကုန်သွင်းမည်</button>
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+}
+
+async function saveRestock(productId){
+  const p = state.products.find(x => x.id === productId);
+  if(!p) return;
+  const qty = Number(document.getElementById('rs-qty').value) || 0;
+  const unitCost = Number(document.getElementById('rs-unitcost').value) || 0;
+  const note = document.getElementById('rs-note').value.trim();
+  if(!qty || qty <= 0){ showToast('အရေအတွက် ထည့်ပါ'); return; }
+
+  p.stock += qty;
+  if(unitCost > 0) p.costValue = unitCost;
+
+  const record = {
+    id: uid(), date: Date.now(), productId: p.id, productName: p.name,
+    qty, unitCost, totalCost: unitCost * qty, note, recordedBy: currentStaffName(),
+  };
+  state.restocks.push(record);
+
+  closeSheet();
+  renderScreen();
+  showToast(`${p.name} — ${qty} ${p.unit||''} ထပ်တိုးပြီးပါပြီ`);
+
+  setSyncStatus('syncing');
+  Promise.all([saveRestockRecord(record), saveProductRecords([p])])
+    .then(() => setSyncStatus('ok'))
+    .catch(() => { setSyncStatus('err'); showToast('⚠️ Cloud သို့ သိမ်းဆည်းရာတွင် ကြန့်ကြာနေသည်'); });
+}
+
+function openRestockHistory(){
+  const sorted = [...state.restocks].sort((a,b) => b.date - a.date);
+  const totalCost = state.restocks.reduce((s,r) => s + r.totalCost, 0);
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>📦 Restock မှတ်တမ်း</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div class="stat-grid" style="margin-bottom:14px;">
+      <div class="stat-card accent"><div class="label">စုစုပေါင်း ကုန်ဝယ်စရိတ်</div><div class="value">${money(totalCost)}</div></div>
+    </div>
+    <div class="card">
+      ${ sorted.length===0 ? emptyState('📦','Restock မှတ်တမ်း မရှိသေးပါ','') :
+        sorted.slice(0,50).map(r => `
+          <div class="staff-row">
+            <div class="sr-avatar">📦</div>
+            <div class="sr-info">
+              <div class="sr-name">${escapeAttr(r.productName)} × ${r.qty}${r.note ? ' · '+escapeAttr(r.note) : ''}</div>
+              <div class="sr-pin">${new Date(r.date).toLocaleDateString('my-MM')} · ${r.totalCost>0 ? money(r.totalCost) : '—'}${r.recordedBy ? ' · '+escapeAttr(r.recordedBy) : ''}</div>
+            </div>
+          </div>
+        `).join('') }
+    </div>
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+}
+
+/* ============ CASH RECONCILIATION (ဒိန်ငွေရင်းချေခြင်း) ============ */
+function todayCashSalesTotal(){
+  const today = new Date();
+  return state.sales
+    .filter(s => !s.voided && isSameDay(s.time, today) && s.paymentType !== 'credit' && s.paymentMethod === 'cash')
+    .reduce((a,s) => a + s.total, 0);
+}
+function todayExpenseTotal(){
+  const today = new Date();
+  return state.expenses.filter(e => isSameDay(e.date, today)).reduce((a,e) => a + e.amount, 0);
+}
+
+function openCashRecForm(){
+  const cashSales = todayCashSalesTotal();
+  const cashExpenses = todayExpenseTotal();
+  const lastRec = [...state.cashReconciliations].sort((a,b) => b.date - a.date)[0];
+  const defaultOpening = lastRec ? lastRec.countedCash : 0;
+
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>🧮 ဒိန်ငွေ ရင်းချေမည်</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+
+    <div class="si-sub" style="margin-bottom:12px;">ယနေ့ ငွေသား ရောင်းအား: <b>${money(cashSales)}</b> · ယနေ့ ကုန်ကျစရိတ်: <b>${money(cashExpenses)}</b></div>
+
+    <label>ယနေ့နံနက် ဒိန်ထဲက ငွေ (Opening float)</label>
+    <input type="number" id="cr-opening" value="${defaultOpening || ''}" placeholder="0" oninput="updateCashRecPreview()">
+
+    <label>ယခု ရေတွက်လိုက်သော ငွေ (Counted cash)</label>
+    <input type="number" id="cr-counted" placeholder="0" oninput="updateCashRecPreview()">
+
+    <div id="cr-preview" class="si-sub" style="margin-top:10px; font-size:14px; line-height:1.8;"></div>
+
+    <label style="margin-top:10px;">မှတ်ချက် (ရွေးချယ်ခွင့်)</label>
+    <input type="text" id="cr-note" placeholder="ဥပမာ - ဆယ်ယောက် လျှော့နေသည်">
+
+    <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="saveCashRec()">သိမ်းမည်</button>
+    <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="openCashRecHistory()">မှတ်တမ်းဟောင်းများ ကြည့်ရန်</button>
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+  updateCashRecPreview();
+}
+
+function updateCashRecPreview(){
+  const opening = Number(document.getElementById('cr-opening').value) || 0;
+  const counted = Number(document.getElementById('cr-counted').value) || 0;
+  const cashSales = todayCashSalesTotal();
+  const cashExpenses = todayExpenseTotal();
+  const expected = opening + cashSales - cashExpenses;
+  const diff = counted - expected;
+  const el = document.getElementById('cr-preview');
+  if(!el) return;
+  const diffColor = diff === 0 ? 'var(--success, #16a34a)' : (diff > 0 ? 'var(--accent-dark)' : 'var(--danger)');
+  el.innerHTML = `
+    ရှိသင့်သည့်ငွေ: <b>${money(expected)}</b><br>
+    ${ document.getElementById('cr-counted').value ? `ကွာဟမှု: <b style="color:${diffColor};">${diff>0?'+':''}${money(diff)}</b> ${diff===0 ? '(မှန်ကန်ပါသည်)' : diff>0 ? '(ပိုနေသည်)' : '(လိုနေသည်)'}` : '' }
+  `;
+}
+
+async function saveCashRec(){
+  const openingCash = Number(document.getElementById('cr-opening').value) || 0;
+  const countedCash = Number(document.getElementById('cr-counted').value) || 0;
+  const note = document.getElementById('cr-note').value.trim();
+  if(document.getElementById('cr-counted').value === ''){ showToast('ရေတွက်ထားသော ငွေပမာဏ ထည့်ပါ'); return; }
+
+  const cashSales = todayCashSalesTotal();
+  const cashExpenses = todayExpenseTotal();
+  const expectedCash = openingCash + cashSales - cashExpenses;
+  const difference = countedCash - expectedCash;
+
+  const record = {
+    id: uid(), date: Date.now(), openingCash, countedCash, expectedCash, difference, note,
+    recordedBy: currentStaffName(),
+  };
+  state.cashReconciliations.push(record);
+
+  closeSheet();
+  showToast('ဒိန်ငွေ ရင်းချေမှု သိမ်းပြီးပါပြီ');
+
+  setSyncStatus('syncing');
+  saveCashRecRecord(record)
+    .then(() => setSyncStatus('ok'))
+    .catch(() => { setSyncStatus('err'); showToast('⚠️ Cloud သို့ သိမ်းဆည်းရာတွင် ကြန့်ကြာနေသည်'); });
+}
+
+function openCashRecHistory(){
+  const sorted = [...state.cashReconciliations].sort((a,b) => b.date - a.date);
+  document.getElementById('sheet-content').innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h3>ဒိန်ငွေ ရင်းချေမှု မှတ်တမ်း</h3><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div class="card">
+      ${ sorted.length===0 ? emptyState('🧮','မှတ်တမ်း မရှိသေးပါ','') :
+        sorted.slice(0,60).map(r => {
+          const color = r.difference===0 ? 'var(--success, #16a34a)' : (r.difference>0 ? 'var(--accent-dark)' : 'var(--danger)');
+          return `
+          <div class="staff-row">
+            <div class="sr-avatar">🧮</div>
+            <div class="sr-info">
+              <div class="sr-name">ရေတွက်: ${money(r.countedCash)} · ရှိသင့်: ${money(r.expectedCash)}${r.note ? ' · '+escapeAttr(r.note) : ''}</div>
+              <div class="sr-pin">${new Date(r.date).toLocaleDateString('my-MM')} · <span style="color:${color}; font-weight:700;">${r.difference>0?'+':''}${money(r.difference)}</span>${r.recordedBy ? ' · '+escapeAttr(r.recordedBy) : ''}</div>
+            </div>
+          </div>
+        `; }).join('') }
+    </div>
+  `;
+  document.getElementById('sheet-overlay').classList.add('show');
+}
+
 /* ============ REPORTS ============ */
 let __chartInstance = null;
 function last7Days(){
@@ -2465,52 +2691,111 @@ function last7Days(){
   }
   return days;
 }
-function renderReports(){
-  const activeSales = state.sales.filter(s => !s.voided);
-  const days = last7Days();
-  const totals = days.map(d => activeSales.filter(s => isSameDay(s.time, d)).reduce((a,s)=>a+s.total,0));
-  const weekTotal = totals.reduce((a,b)=>a+b,0);
+/* Reports date range — defaults to the last 7 days, but the person can
+   switch to this month, last month, or pick their own start/end dates.
+   Everything below (totals, profit, expense, chart, top items) recomputes
+   from whichever range is currently selected. */
+function getReportRange(){
+  const type = state.reportRangeType || '7days';
+  const now = new Date();
+  let start, end, label;
+  if(type === 'month'){
+    start = new Date(now.getFullYear(), now.getMonth(), 1);
+    end = new Date(now.getFullYear(), now.getMonth()+1, 0, 23,59,59,999);
+    label = 'ဒီလ';
+  } else if(type === 'lastmonth'){
+    start = new Date(now.getFullYear(), now.getMonth()-1, 1);
+    end = new Date(now.getFullYear(), now.getMonth(), 0, 23,59,59,999);
+    label = 'ပြီးခဲ့သောလ';
+  } else if(type === 'custom'){
+    start = state.reportRangeStart ? new Date(state.reportRangeStart+'T00:00:00') : new Date(now.getFullYear(), now.getMonth(), 1);
+    end = state.reportRangeEnd ? new Date(state.reportRangeEnd+'T23:59:59') : new Date(now);
+    label = 'ရွေးထားသည့်ကာလ';
+  } else {
+    end = new Date(now); end.setHours(23,59,59,999);
+    start = new Date(now); start.setDate(start.getDate()-6); start.setHours(0,0,0,0);
+    label = 'လွန်ခဲ့သော ၇ ရက်';
+  }
+  const days = [];
+  const cursor = new Date(start);
+  while(cursor <= end && days.length <= 31){ days.push(new Date(cursor)); cursor.setDate(cursor.getDate()+1); }
+  return { type, start, end, label, days };
+}
+function setReportRange(type){
+  state.reportRangeType = type;
+  renderScreen();
+}
+function applyCustomReportRange(){
+  state.reportRangeType = 'custom';
+  state.reportRangeStart = document.getElementById('rr-start').value;
+  state.reportRangeEnd = document.getElementById('rr-end').value;
+  renderScreen();
+}
 
+function renderReports(){
+  const range = getReportRange();
+  const inRange = (t) => t >= range.start.getTime() && t <= range.end.getTime();
+  const activeSales = state.sales.filter(s => !s.voided);
+  const periodSales = activeSales.filter(s => inRange(s.time));
+  const periodExpenses = state.expenses.filter(e => inRange(e.date));
+
+  const periodTotal = periodSales.reduce((a,s)=>a+s.total,0);
   const itemCount = {};
-  activeSales.forEach(s => s.items.forEach(it => { itemCount[it.name] = (itemCount[it.name]||0) + it.qty; }));
+  periodSales.forEach(s => s.items.forEach(it => { itemCount[it.name] = (itemCount[it.name]||0) + it.qty; }));
   const top = Object.entries(itemCount).sort((a,b)=>b[1]-a[1]).slice(0,5);
 
-  const weekSales = activeSales.filter(s => days.some(d => isSameDay(s.time, d)));
-  const weekProfit = profitFromSales(weekSales);
+  const periodProfit = profitFromSales(periodSales);
   const allTimeProfit = profitFromSales(activeSales);
-
-  const weekExpense = state.expenses.filter(e => days.some(d => isSameDay(e.date, d))).reduce((a,e)=>a+e.amount,0);
+  const periodExpenseTotal = periodExpenses.reduce((a,e)=>a+e.amount,0);
   const allTimeExpense = state.expenses.reduce((a,e)=>a+e.amount,0);
-  const weekNet = weekProfit.total - weekExpense;
+  const periodNet = periodProfit.total - periodExpenseTotal;
   const allTimeNet = allTimeProfit.total - allTimeExpense;
 
+  const chartOk = range.days.length > 0 && range.days.length <= 31;
+
   return `
-    <div class="stat-grid" style="margin-bottom:16px;">
-      <div class="stat-card"><div class="label">လွန်ခဲ့သော ၇ ရက် ရောင်းအား</div><div class="value">${money(weekTotal)}</div></div>
-      <div class="stat-card accent"><div class="label">အော်ဒါစုစုပေါင်း</div><div class="value">${activeSales.length}</div></div>
+    <div class="field-row" style="margin-bottom:8px; flex-wrap:wrap; gap:6px;">
+      ${['7days','month','lastmonth'].map(t => `
+        <button class="btn ${range.type===t?'btn-primary':'btn-outline'}" style="flex:1; font-size:12.5px; padding:8px 4px;" onclick="setReportRange('${t}')">${ t==='7days'?'၇ ရက်':t==='month'?'ဒီလ':'ပြီးခဲ့သောလ' }</button>
+      `).join('')}
+      <button class="btn ${range.type==='custom'?'btn-primary':'btn-outline'}" style="flex:1; font-size:12.5px; padding:8px 4px;" onclick="toggleCustomRangePicker()">ကိုယ်တိုင်ရွေး</button>
+    </div>
+    <div id="rr-custom-picker" style="display:${range.type==='custom'?'block':'none'}; margin-bottom:14px;">
+      <div class="field-row">
+        <div><label>မှ</label><input type="date" id="rr-start" value="${state.reportRangeStart||''}"></div>
+        <div><label>အထိ</label><input type="date" id="rr-end" value="${state.reportRangeEnd||''}"></div>
+      </div>
+      <button class="btn btn-primary btn-block" style="margin-top:8px;" onclick="applyCustomReportRange()">ရက်စွဲ သတ်မှတ်မည်</button>
     </div>
 
     <div class="stat-grid" style="margin-bottom:16px;">
-      <div class="stat-card"><div class="label">လွန်ခဲ့သော ၇ ရက် အမြတ်</div><div class="value">${money(weekProfit.total)}</div></div>
+      <div class="stat-card"><div class="label">${range.label} ရောင်းအား</div><div class="value">${money(periodTotal)}</div></div>
+      <div class="stat-card accent"><div class="label">အော်ဒါစုစုပေါင်း</div><div class="value">${periodSales.length}</div></div>
+    </div>
+
+    <div class="stat-grid" style="margin-bottom:16px;">
+      <div class="stat-card"><div class="label">${range.label} အမြတ်</div><div class="value">${money(periodProfit.total)}</div></div>
       <div class="stat-card accent"><div class="label">စုစုပေါင်း အမြတ် (အားလုံး)</div><div class="value">${money(allTimeProfit.total)}</div></div>
     </div>
     ${ allTimeProfit.unknownCount>0 ? `<div class="si-sub" style="margin-bottom:16px;">* ကုန်ပစ္စည်း ${allTimeProfit.unknownCount} ခု အတွက် ဝယ်ဈေး မထည့်ရသေးလို့ အမြတ်တွင် ထည့်မတွက်ရသေးပါ — ကုန်ပစ္စည်း ပြင်ဆင်ရာမှာ ဝယ်ဈေး ဖြည့်ပေးပါ</div>` : '' }
 
     <div class="section-title">ကုန်ကျစရိတ်နှင့် အသားတင်အမြတ်</div>
     <div class="stat-grid" style="margin-bottom:16px;">
-      <div class="stat-card"><div class="label">လွန်ခဲ့သော ၇ ရက် ကုန်ကျစရိတ်</div><div class="value">${money(weekExpense)}</div></div>
+      <div class="stat-card"><div class="label">${range.label} ကုန်ကျစရိတ်</div><div class="value">${money(periodExpenseTotal)}</div></div>
       <div class="stat-card accent"><div class="label">စုစုပေါင်း ကုန်ကျစရိတ်</div><div class="value">${money(allTimeExpense)}</div></div>
     </div>
     <div class="stat-grid" style="margin-bottom:16px;">
-      <div class="stat-card"><div class="label">အသားတင်အမြတ် (၇ ရက်)</div><div class="value">${money(weekNet)}</div></div>
+      <div class="stat-card"><div class="label">အသားတင်အမြတ် (${range.label})</div><div class="value">${money(periodNet)}</div></div>
       <div class="stat-card accent"><div class="label">အသားတင်အမြတ် (အားလုံး)</div><div class="value">${money(allTimeNet)}</div></div>
     </div>
     <div class="si-sub" style="margin-bottom:16px;">အသားတင်အမြတ် = ကုန်ပစ္စည်း အမြတ် − ကုန်ကျစရိတ် (ဆိုင်ငှားခ၊ လျှပ်စစ်၊ လစာစသည်)</div>
 
-    <div class="section-title">နေ့စဉ် ရောင်းအား (၇ ရက်)</div>
-    <div class="card"><canvas id="salesChart" height="160"></canvas></div>
+    ${ chartOk ? `
+      <div class="section-title">နေ့စဉ် ရောင်းအား (${range.label})</div>
+      <div class="card"><canvas id="salesChart" height="160"></canvas></div>
+    ` : `<div class="si-sub" style="margin-bottom:16px;">* ရွေးထားသော ကာလ ၃၁ ရက်ထက် ကြာလွန်းလို့ နေ့စဉ်ဇယား မပြသနိုင်ပါ</div>` }
 
-    <div class="section-title">အရောင်းရဆုံး ကုန်ပစ္စည်းများ</div>
+    <div class="section-title">အရောင်းရဆုံး ကုန်ပစ္စည်းများ (${range.label})</div>
     <div class="card">
       ${ top.length===0 ? emptyState('📊','ဒေတာမရှိသေးပါ','') : `
         <table class="table-simple">
@@ -2530,6 +2815,10 @@ function renderReports(){
       `}
     </div>
   `;
+}
+function toggleCustomRangePicker(){
+  state.reportRangeType = 'custom';
+  renderScreen();
 }
 /* Profit uses each item's price AT THE TIME it was sold (already recorded
    in the sale) against the product's CURRENT cost value. Items whose
@@ -2557,7 +2846,7 @@ function profitFromSales(sales){
 function drawChart(){
   const canvas = document.getElementById('salesChart');
   if(!canvas || typeof Chart === 'undefined') return;
-  const days = last7Days();
+  const days = getReportRange().days;
   const labels = days.map(d => d.getDate()+'/'+(d.getMonth()+1));
   const totals = days.map(d => state.sales.filter(s => isSameDay(s.time, d) && !s.voided).reduce((a,s)=>a+s.total,0));
   if(__chartInstance) __chartInstance.destroy();
@@ -2586,6 +2875,14 @@ function renderSettings(){
       <input type="text" id="st-homephones" value="${escapeAttr(state.settings.homePhones||'')}" placeholder="09xxxxxxxxx, 09xxxxxxxxx">
       <label>ငွေကြေးအမှတ်အသား</label>
       <input type="text" id="st-currency" value="${escapeAttr(state.settings.currency||'Ks')}">
+      <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="saveShopSettings()">သိမ်းမည်</button>
+    </div>
+
+    <div class="section-title">📨 Telegram အကြွေးသတိပေးချက်</div>
+    <div class="card">
+      <div class="si-sub" style="margin-bottom:10px;">Telegram Bot တစ်ခု ဖန်တီးပြီး token ကို ဒီနေရာမှာ ထည့်ထားပါ — ဖောက်သည်တစ်ဦးချင်းစီရဲ့ Telegram Chat ID ကို debt customer page ထဲမှာ ထည့်ပြီးမှသာ အဲ့သူ့ဆီ တိုက်ရိုက် သတိပေးစာ ပို့နိုင်ပါမည်။</div>
+      <label>Telegram Bot Token</label>
+      <input type="text" id="st-tgtoken" value="${escapeAttr(state.settings.telegramBotToken||'')}" placeholder="@BotFather ကနေ ရလာသော token">
       <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="saveShopSettings()">သိမ်းမည်</button>
     </div>
 
@@ -2698,6 +2995,8 @@ async function saveShopSettings(){
   state.settings.shopPhones = document.getElementById('st-shopphones').value.trim();
   state.settings.homePhones = document.getElementById('st-homephones').value.trim();
   state.settings.currency = document.getElementById('st-currency').value.trim() || 'Ks';
+  const tgInput = document.getElementById('st-tgtoken');
+  if(tgInput) state.settings.telegramBotToken = tgInput.value.trim();
   const daysInput = document.getElementById('st-archivedays');
   if(daysInput) state.settings.archiveDays = Math.max(7, Number(daysInput.value) || 90);
   setSyncStatus('syncing');
@@ -3085,10 +3384,63 @@ function openDebtCustomerDetail(bookId, custId){
       `}
     </div>
     <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="addDebtPaymentPrompt('${bookId}','${custId}')">💵 ပေးချေမှု ထည့်ရန်</button>
+    ${ bal > 0 ? `
+      <div class="field-row" style="margin-top:8px;">
+        <button class="btn btn-outline" onclick="sendTelegramReminder('${bookId}','${custId}')">📨 Telegram</button>
+        <button class="btn btn-outline" onclick="sendSmsReminder('${bookId}','${custId}')">💬 SMS</button>
+      </div>
+      <button class="btn btn-ghost btn-block" style="margin-top:8px; font-size:12px;" onclick="editDebtCustomerTelegramId('${bookId}','${custId}')">${cust.telegramChatId ? 'Telegram Chat ID ပြင်ရန် ('+escapeAttr(cust.telegramChatId)+')' : '+ Telegram Chat ID ထည့်ရန်'}</button>
+    ` : '' }
     <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="deleteDebtCustomerPrompt('${bookId}','${custId}')">ဖောက်သည် ဖျက်ရန်</button>
     <button class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="openDebtBookDetail('${bookId}')">← နောက်သို့</button>
   `;
   document.getElementById('sheet-overlay').classList.add('show');
+}
+
+async function editDebtCustomerTelegramId(bookId, custId){
+  const book = state.debtBooks.find(b => b.id === bookId);
+  const cust = book && book.customers.find(c => c.id === custId);
+  if(!cust) return;
+  const chatId = (prompt('Telegram Chat ID ထည့်ပါ (ဖောက်သည်က bot ကို /start နှိပ်ပြီးမှ ရနိုင်ပါမည်)', cust.telegramChatId || '') || '').trim();
+  if(chatId === cust.telegramChatId) return;
+  await refreshDebtBooksBeforeWrite();
+  const freshBook = state.debtBooks.find(b => b.id === bookId);
+  const freshCust = freshBook && freshBook.customers.find(c => c.id === custId);
+  if(!freshCust) return;
+  freshCust.telegramChatId = chatId;
+  setSyncStatus('syncing');
+  await saveDebtBookRecord(freshBook);
+  setSyncStatus('ok');
+  openDebtCustomerDetail(bookId, custId);
+}
+
+async function sendTelegramReminder(bookId, custId){
+  const book = state.debtBooks.find(b => b.id === bookId);
+  const cust = book && book.customers.find(c => c.id === custId);
+  if(!cust) return;
+  const token = state.settings.telegramBotToken;
+  if(!token){ showToast('Settings ထဲမှာ Telegram Bot Token အရင်ထည့်ပါ'); return; }
+  if(!cust.telegramChatId){ showToast('ဒီဖောက်သည်အတွက် Telegram Chat ID အရင်ထည့်ပါ'); return; }
+  const bal = debtBalance(cust);
+  const text = `${state.settings.shopName || 'ဆိုင်'} မှ သတိပေးချက်\n\nမင်္ဂလာပါ ${cust.name},\nလက်ကျန် အကြွေးငွေ ${money(bal)} ကျန်ရှိနေပါသည်။ အဆင်ပြေချိန် ပြန်လည်ပေးချေပေးပါရန် လေးစားစွာ တောင်းဆိုအပ်ပါသည်။`;
+  try{
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage?chat_id=${encodeURIComponent(cust.telegramChatId)}&text=${encodeURIComponent(text)}`);
+    const data = await res.json();
+    if(data.ok) showToast('Telegram သတိပေးစာ ပို့ပြီးပါပြီ');
+    else showToast('ပို့၍မရပါ — Chat ID ပြန်စစ်ပါ (' + (data.description || 'error') + ')');
+  }catch(e){
+    showToast('Telegram ပို့ရာတွင် error ဖြစ်ပါသည် — internet စစ်ပါ');
+  }
+}
+
+function sendSmsReminder(bookId, custId){
+  const book = state.debtBooks.find(b => b.id === bookId);
+  const cust = book && book.customers.find(c => c.id === custId);
+  if(!cust) return;
+  if(!cust.phone){ showToast('ဒီဖောက်သည်အတွက် ဖုန်းနံပါတ် မရှိပါ'); return; }
+  const bal = debtBalance(cust);
+  const text = `${state.settings.shopName || 'ဆိုင်'} မှ သတိပေးချက် - မင်္ဂလာပါ ${cust.name}, လက်ကျန်အကြွေး ${money(bal)} ရှိပါသည်။ ပြန်ဆပ်ပေးပါရန် တောင်းဆိုပါသည်။`;
+  window.location.href = `sms:${cust.phone}?body=${encodeURIComponent(text)}`;
 }
 
 async function addDebtPaymentPrompt(bookId, custId){
